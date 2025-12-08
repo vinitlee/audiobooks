@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from kokoro import KPipeline
+    from typing import Any
 
 from line_profiler import profile
 from pathlib import Path
@@ -13,7 +14,9 @@ import json
 import re
 import subprocess
 import datetime
+
 import argparse
+import yaml
 
 import numpy as np
 import cv2
@@ -432,7 +435,7 @@ def reset_test_env():
 
 
 def main(
-    base_paths: list[Path | str] = [],
+    files: set[Path | str],
     voice: str = "am_michael",
     speed: float = 1,
     lexicon: Path | str | None = None,
@@ -443,7 +446,9 @@ def main(
     overwrite_m4b=False,
 ):
 
-    for p in base_paths:
+    print(files)
+
+    for p in files:
         my_proj = TTSProject(p, lexicon=lexicon, voice=voice, speed=speed)
         # TODO: There are probably too many overwrite flags, figure out if you want overwrite_project or just sections
         if (not my_proj.completed) or overwrite_project:
@@ -452,13 +457,22 @@ def main(
                 my_proj.create_ffmetadata()
                 my_proj.build_master_audio(overwrite=overwrite_master)
                 my_proj.build_m4b(overwrite=overwrite_m4b)
+        else:
+            print(f"Skipping {p}, already completed.")
+
+
+def load_config(config_path, valid_args):
+    config = yaml.safe_load(Path(config_path).open())
+    valid_config = {k: v for k, v in config.items() if (k in valid_args)}
+
+    return valid_config
 
 
 def parse_arguments() -> dict:
-    arguments = {}
+    set_args = {}
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "base_paths",
+        "files",
         metavar="PATH",
         nargs="*",
         help="Path(s) to *.epub or dir to be processed; accepts * as a wildcard",
@@ -523,19 +537,39 @@ def parse_arguments() -> dict:
         action="store_true",
         help="Allow overwriting M4B",
     )
+    parser.add_argument(
+        "--config",
+        "-c",
+        metavar="PATH",
+        help="Specify YAML config. YAML will be overridden by any cmd arguments.",
+    )
     args = parser.parse_args()
-    arguments = {
-        k: v for k, v in vars(args).items() if ((v is not None) and (v is not False))
-    }
-    expanded_paths = []
-    for p in args.base_paths:
-        expanded_paths.extend(glob.glob(p))
-    arguments["base_paths"] = expanded_paths
-    return arguments
+
+    set_args = {}
+    if args.config:
+        set_args.update(load_config(args.config, vars(args).keys()))
+    set_args.update(
+        {
+            k: v
+            for k, v in vars(args).items()
+            if (bool(v) and (v is not None) and (v is not False))
+        }
+    )
+    del set_args["config"]
+
+    print(set_args)
+    expanded_paths = set()
+    for p in set_args["files"]:
+        expanded_paths = expanded_paths.union(glob.glob(p))
+    set_args["files"] = expanded_paths
+    print(set_args)
+
+    return set_args
 
 
 my_proj = None
 if __name__ == "__main__":
     arguments = parse_arguments()
+
     main(**arguments)
 # %%

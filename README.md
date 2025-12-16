@@ -8,3 +8,7 @@
 - [ ] Cleanup
 - [ ] Moving into final directories
 - [ ] Watcher
+
+- [ ] Look into EPUB -> TXT parser that loses spaces:
+      Your big brother isn’t usually all that cool and collected, I thought.
+      Your big brother isn't usually all that cool and collected, Ithought.

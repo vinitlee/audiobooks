@@ -14,6 +14,7 @@ import json
 import re
 import subprocess
 import datetime
+import shutil
 
 import argparse
 import yaml
@@ -24,6 +25,7 @@ import cv2
 import soundfile as sf
 
 from ebooklib import epub
+import ebooklib
 import lxml.html
 import torch
 
@@ -85,6 +87,10 @@ class TTSProject:
     @property
     def completed(self) -> bool:
         return self.data.get("completed", False)
+
+    def save_book_text(self, output="book.txt"):
+        text = "\n\n".join([c.text for c in self.book.chapters])
+        (self.project_dir_path / output).write_text(text, encoding="utf-8")
 
     def lexicon_g2p(self, stock_g2p):
         def custom_g2p(text: str):
@@ -212,7 +218,7 @@ class TTSProject:
         self.data["cover_path"] = str(cover_path.resolve())
         self.write_data_file()
 
-    def build_m4b(self, overwrite=False, output_path: Path | str | None = None):
+    def build_m4b(self, overwrite=False):
 
         if (not self.data.get("completed", False)) or overwrite:
             self.save_cover_image()
@@ -249,6 +255,29 @@ class TTSProject:
 
             self.data["completed"] = True
             self.write_data_file()
+
+    def copy_to_library(self, parent_dir: Path | str, overwrite=False, epub=False):
+        parent_dir = Path(parent_dir)
+        m4b_src = Path(self.data.get("m4b_path", ""))
+        if not str(m4b_src):
+            print("Source m4b not found, aborting.")
+            pass
+
+        book_dir = parent_dir / m4b_src.stem
+        book_dir.mkdir(parents=True, exist_ok=True)
+        m4b_filename = m4b_src.name
+        m4b_dest = book_dir / m4b_filename
+        if not m4b_dest.exists() or overwrite:
+            shutil.copy(m4b_src, m4b_dest)
+        else:
+            print(f"{m4b_dest} already exists. Skipping copy.")
+
+        if epub:
+            epub_dest = book_dir / self.epub_path.name
+            if not epub_dest.exists() or overwrite:
+                shutil.copy(self.epub_path, epub_dest)
+            else:
+                print(f"{epub_dest} already exists. Skipping copy.")
 
     def create_ffmetadata(self):
         header_data = {
@@ -384,8 +413,15 @@ class TextBook:
         year_match = re.match(re.compile(r"[0-9]{4}"), self.metadata["date"])
         if year_match:
             self.metadata["year"] = year_match.group(0)
+
+        # self.cover = cv2.imdecode(
+        #     np.frombuffer(self.book.get_item_with_id("cover").content, np.uint8),
+        #     cv2.IMREAD_COLOR,
+        # )
+
+        cover_items = list(self.book.get_items_of_type(ebooklib.ITEM_COVER))
         self.cover = cv2.imdecode(
-            np.frombuffer(self.book.get_item_with_id("cover").content, np.uint8),
+            np.frombuffer(cover_items[0].content, np.uint8),
             cv2.IMREAD_COLOR,
         )
 
@@ -408,7 +444,8 @@ class Chapter:
             (re.compile(r"\:"), ": "),
             (re.compile(r"[\“\”\"]"), '"'),
             (re.compile(r"[\‘\’\']"), "'"),
-            (re.compile(r"[\xa0*~@<>_+=]"), ""),
+            (re.compile(r"\xa0+"), " "),
+            (re.compile(r"[*~@<>_+=]"), ""),
             (re.compile(r"hk"), "hek"),
             (re.compile(r"\n…"), "…"),
             (re.compile(r"\n+"), "\n"),
@@ -440,16 +477,21 @@ def main(
     speed: float = 1,
     lexicon: Path | str | None = None,
     init_only=False,
+    output: Path | str | None = None,
     overwrite_project=False,
     overwrite_tts=False,
     overwrite_master=False,
     overwrite_m4b=False,
+    overwrite_output=False,
+    clean=False,
 ):
 
-    print(files)
+    # print(files)
+    print(output)
 
     for p in files:
         my_proj = TTSProject(p, lexicon=lexicon, voice=voice, speed=speed)
+        my_proj.save_book_text()
         # TODO: There are probably too many overwrite flags, figure out if you want overwrite_project or just sections
         if (not my_proj.completed) or overwrite_project:
             if not init_only:
@@ -458,7 +500,11 @@ def main(
                 my_proj.build_master_audio(overwrite=overwrite_master)
                 my_proj.build_m4b(overwrite=overwrite_m4b)
         else:
-            print(f"Skipping {p}, already completed.")
+            print(f"Not processing {p}, already completed.")
+        if output and my_proj.completed:
+            my_proj.copy_to_library(output, overwrite=overwrite_output, epub=True)
+            if clean:
+                print("Clean not implemented.")
 
 
 def load_config(config_path, valid_args):
@@ -538,6 +584,18 @@ def parse_arguments() -> dict:
         help="Allow overwriting M4B",
     )
     parser.add_argument(
+        "--clean",
+        "-cc",
+        action="store_true",
+        help="Delete project files after running. Ignored if output not set.",
+    )
+    parser.add_argument(
+        "--output",
+        "-o",
+        metavar="PATH",
+        help="Directory to copy final M4B when done",
+    )
+    parser.add_argument(
         "--config",
         "-c",
         metavar="PATH",
@@ -557,12 +615,12 @@ def parse_arguments() -> dict:
     )
     del set_args["config"]
 
-    print(set_args)
+    # print(set_args)
     expanded_paths = set()
     for p in set_args["files"]:
         expanded_paths = expanded_paths.union(glob.glob(p))
     set_args["files"] = expanded_paths
-    print(set_args)
+    # print(set_args)
 
     return set_args
 

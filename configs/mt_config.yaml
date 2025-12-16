@@ -1,0 +1,13 @@
+name: Mushoku Tensei - Jobless Reincarnation
+author: Rifujin na Magonote
+series: Mushoku Tensei
+
+# Files
+files:
+  - G:\Projects\Audiobooks\books\Mushoku*
+output: X:\Audiobooks\Rifujin na Magonote\Mushoku Tensei
+
+# TTS
+voice: am_michael
+speed: 1
+lexicon: G:\Projects\Audiobooks\lexicons\mushoku_tensei.json

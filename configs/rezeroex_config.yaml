@@ -1,0 +1,13 @@
+name: ReZero - Starting Life in Another World EX
+author: Tappei Nagatsuki
+series: ReZero EX
+
+# Files
+files:
+  - G:\Projects\Audiobooks\books\ReZero*
+output: X:\Audiobooks\Tappei Nagatsuki\ReZero EX
+
+# TTS
+voice: am_michael
+speed: 1
+lexicon: G:\Projects\Audiobooks\lexicons\rezero_lexicon.json

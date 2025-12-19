@@ -409,15 +409,14 @@ class TextBook:
         self.metadata["author"] = self.book.get_metadata("DC", "creator")[0][0]
         # TODO: Support publisher
         self.metadata["publisher"] = ""
-        self.metadata["date"] = self.book.get_metadata("DC", "date")[0][0]
-        year_match = re.match(re.compile(r"[0-9]{4}"), self.metadata["date"])
-        if year_match:
-            self.metadata["year"] = year_match.group(0)
-
-        # self.cover = cv2.imdecode(
-        #     np.frombuffer(self.book.get_item_with_id("cover").content, np.uint8),
-        #     cv2.IMREAD_COLOR,
-        # )
+        try:
+            self.metadata["date"] = self.book.get_metadata("DC", "date")[0][0]
+            year_match = re.match(re.compile(r"[0-9]{4}"), self.metadata["date"])
+            if year_match:
+                self.metadata["year"] = year_match.group(0)
+        except:
+            self.metadata["date"] = ""
+            self.metadata["year"] = ""
 
         cover_items = list(self.book.get_items_of_type(ebooklib.ITEM_COVER))
         self.cover = cv2.imdecode(

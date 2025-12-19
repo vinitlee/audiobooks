@@ -25,7 +25,7 @@ def load_config(config_path, valid_args):
 
 
 # %%
-config_path = Path(r"configs\rezeroex_config.yaml")
+config_path = Path(r"configs\aoab_config.yaml")
 config = load_config(config_path, ["files", "lexicon"])
 
 lexicon_path = Path(config["lexicon"])

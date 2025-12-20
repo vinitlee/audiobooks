@@ -100,3 +100,17 @@ def pronounce_section(n, step=10):
     i = n * step
     for w in list(lexicon.keys())[i : i + step]:
         pronounce(w, lexicon[w], verbose=True)
+
+
+# %%
+def json2yaml(json_path):
+    json_path = Path(json_path)
+    mapping = json.load(json_path.open("r", encoding="utf-8"))
+    yaml.dump(
+        mapping,
+        json_path.with_suffix(".yaml").open("w", encoding="utf-8"),
+        allow_unicode=True,
+    )
+
+
+json2yaml(r"lexicons\AoaB.json")

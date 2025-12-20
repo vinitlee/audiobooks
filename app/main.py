@@ -3,8 +3,8 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from kokoro import KPipeline
-    from typing import Any
+    from kokoro import KPipeline, KModel
+    from typing import Any, Callable
 
 from line_profiler import profile
 from pathlib import Path
@@ -32,12 +32,34 @@ import torch
 import warnings
 from tqdm import tqdm
 
-# %%
-KOKORO_MODEL = "hexgrad/Kokoro-82M"
-PIPELINE: KPipeline | None = None
-
 
 # %%
+class KPipelineLazy:
+    def __init__(self, *args, **kwargs):
+        self.args = args
+        self.kwargs = kwargs
+        self._obj = None
+
+    def load(self):
+        if self._obj is None:
+            from kokoro import KPipeline
+
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", UserWarning)
+                warnings.simplefilter("ignore", FutureWarning)
+                self._obj = KPipeline(*self.args, **self.kwargs)
+        return self._obj
+
+    def __getattr__(self, name: str) -> profile:
+        return getattr(self.load(), name)
+    
+    def __call__(self, *args, **kwargs):
+        return self.load()(*args, **kwargs)
+
+
+PIPELINE = KPipelineLazy(lang_code="a", device="cuda", repo_id="hexgrad/Kokoro-82M")
+
+
 class TTSProject:
     def __init__(
         self,
@@ -52,12 +74,14 @@ class TTSProject:
         starting_path = Path(starting_path)
         if not starting_path.exists():
             raise FileExistsError(f"{starting_path.resolve()} does not exist")
+        
+        if starting_path.is_dir():
+            self.load_project_dir(starting_path)
+        elif starting_path.suffix == ".epub":
+            self.init_project_dir(starting_path)
 
         if pipeline is None:
-            from kokoro import KPipeline
-
             global PIPELINE
-            PIPELINE = KPipeline(lang_code="a", device="cuda", repo_id=KOKORO_MODEL)
             self.pipeline = PIPELINE
         else:
             self.pipeline = pipeline
@@ -67,12 +91,9 @@ class TTSProject:
             self.lexicon_path = Path(lexicon)
         self.epub_path: Path
         self.lexicon: dict
-        if starting_path.is_dir():
-            self.load_project_dir(starting_path)
-        elif starting_path.suffix == ".epub":
-            self.init_project_dir(starting_path)
 
         self.data["voice"] = voice
+        
         self.data["speed"] = speed
 
         self.book: TextBook = TextBook(self.epub_path)
@@ -83,6 +104,9 @@ class TTSProject:
         self.data["m4b_path"] = str(m4b_path.resolve())
 
         self.write_data_file()
+
+    def setup_paths(self):
+
 
     @property
     def completed(self) -> bool:
@@ -405,8 +429,11 @@ class TextBook:
             "year": "",
         }
         self.metadata["title"] = self.book.title
-        # TODO: Support multiple authors
-        self.metadata["author"] = self.book.get_metadata("DC", "creator")[0][0]
+        try:
+            # TODO: Support multiple authors
+            self.metadata["author"] = self.book.get_metadata("DC", "creator")[0][0]
+        except:
+            pass
         # TODO: Support publisher
         self.metadata["publisher"] = ""
         try:
@@ -415,8 +442,7 @@ class TextBook:
             if year_match:
                 self.metadata["year"] = year_match.group(0)
         except:
-            self.metadata["date"] = ""
-            self.metadata["year"] = ""
+            pass
 
         cover_items = list(self.book.get_items_of_type(ebooklib.ITEM_COVER))
         self.cover = cv2.imdecode(
@@ -460,14 +486,6 @@ class Chapter:
             full_text = re.sub(p, ss, full_text)
 
         return full_text
-
-
-def reset_test_env():
-    if Path(r"test_data\test").exists():
-        if Path(r"test_data\test\test.epub").exists():
-            Path(r"test_data\test\test.epub").rename(Path(r"test_data\test.epub"))
-        [x.unlink() for x in Path(r"test_data\test").glob("*")]
-        Path(r"test_data\test").rmdir()
 
 
 def main(

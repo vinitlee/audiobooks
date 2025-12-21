@@ -413,10 +413,26 @@ class TextBook:
         return self.metadata.get("author", "-author-")
 
     def unpack_chapters(self):
-        for entry in self.book.toc:
+        # Spine with href-style ids
+        explicit_spine = [
+            self.book.get_item_with_id(iid).file_name for iid, _ in self.book.spine
+        ]
+        range_indices = [explicit_spine.index(el.href) for el in self.book.toc]
+        # Groups of chapters that correspond with the TOC entries
+        href_groups = [
+            explicit_spine[slice(*i)]
+            for i in zip(range_indices[:], range_indices[1:] + [len(explicit_spine)])
+        ]
+
+        item_groups = [
+            [self.book.get_item_with_href(href) for href in g] for g in href_groups
+        ]
+
+        for i, entry in enumerate(self.book.toc):
             title = entry.title
-            item = self.book.get_item_with_href(entry.href.split("#")[0])
-            chapter = Chapter(title, item)
+            # item = self.book.get_item_with_href(entry.href.split("#")[0])
+            items = item_groups[i]
+            chapter = Chapter(title, items)
             if chapter.is_valid():
                 self.chapters.append(chapter)
         # Hack to get the title at the beginning
@@ -464,7 +480,7 @@ class Chapter:
         return len(self.text) >= min_length
 
     @staticmethod
-    def chapter_to_text(chapter: epub.EpubItem) -> str:
+    def chapter_to_text(chapters: list[epub.EpubItem]) -> str:
         pause = re.compile(r"^[ \xa0(***)]+$")
         subs = [
             (re.compile(r"(<BLOCK><PAUSE>)+<BLOCK>"), "<BLOCK>……………<BLOCK>"),
@@ -480,9 +496,12 @@ class Chapter:
             (re.compile(r"\n+"), "\n"),
         ]
 
-        content = chapter.get_content()
-        doc = lxml.html.document_fromstring(content)
-        textblocks = ["".join(tag.itertext()) for tag in doc.iter(tag="p")]
+        textblocks = []
+
+        for chapter in chapters:
+            content = chapter.get_content()
+            doc = lxml.html.document_fromstring(content)
+            textblocks += ["".join(tag.itertext()) for tag in doc.iter(tag="p")]
         textblocks = [t for t in textblocks if len(t)]
         textblocks = [t if not re.match(pause, t) else "<PAUSE>" for t in textblocks]
         full_text = "<BLOCK>".join(textblocks)

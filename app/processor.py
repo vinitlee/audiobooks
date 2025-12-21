@@ -222,7 +222,7 @@ class Lexicon:
         and then apply corrections with the g2p mappings per-token
         """
 
-        def g2p_fn(text: str) -> Tuple[str, List[MToken]]:
+        def g2g2p_fn(text: str) -> Tuple[str, List[MToken]]:
             text = self.g2g(text)
 
             gs, tokens = stock_g2p(text)
@@ -235,7 +235,7 @@ class Lexicon:
 
             return gs, tokens
 
-        return g2p_fn
+        return g2g2p_fn
 
     def to_dict(self):
         return {

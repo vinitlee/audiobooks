@@ -52,15 +52,20 @@ class KPipelineLazy:
 
     def __getattr__(self, name: str) -> profile:
         return getattr(self.load(), name)
-    
+
     def __call__(self, *args, **kwargs):
         return self.load()(*args, **kwargs)
 
 
-PIPELINE = KPipelineLazy(lang_code="a", device="cuda", repo_id="hexgrad/Kokoro-82M")
+if torch.cuda.is_available():
+    PIPELINE = KPipelineLazy(lang_code="a", device="cuda", repo_id="hexgrad/Kokoro-82M")
+else:
+    PIPELINE = KPipelineLazy(lang_code="a", device="cpu", repo_id="hexgrad/Kokoro-82M")
 
 
 class TTSProject:
+    lexicon_path: Path | str | None = None
+
     def __init__(
         self,
         starting_path: Path | str,
@@ -74,7 +79,7 @@ class TTSProject:
         starting_path = Path(starting_path)
         if not starting_path.exists():
             raise FileExistsError(f"{starting_path.resolve()} does not exist")
-        
+
         if starting_path.is_dir():
             self.load_project_dir(starting_path)
         elif starting_path.suffix == ".epub":
@@ -93,7 +98,7 @@ class TTSProject:
         self.lexicon: dict
 
         self.data["voice"] = voice
-        
+
         self.data["speed"] = speed
 
         self.book: TextBook = TextBook(self.epub_path)
@@ -105,8 +110,7 @@ class TTSProject:
 
         self.write_data_file()
 
-    def setup_paths(self):
-
+    # def setup_paths(self):
 
     @property
     def completed(self) -> bool:
@@ -504,7 +508,7 @@ def main(
 ):
 
     # print(files)
-    print(output)
+    # print(output)
 
     for p in files:
         my_proj = TTSProject(p, lexicon=lexicon, voice=voice, speed=speed)
@@ -630,12 +634,14 @@ def parse_arguments() -> dict:
             if (bool(v) and (v is not None) and (v is not False))
         }
     )
-    del set_args["config"]
+    if "config" in set_args:
+        del set_args["config"]
 
     # print(set_args)
     expanded_paths = set()
     for p in set_args["files"]:
-        expanded_paths = expanded_paths.union(glob.glob(p))
+        g = glob.glob(str(Path(p).expanduser().resolve()))
+        expanded_paths = expanded_paths.union(g)
     set_args["files"] = expanded_paths
     # print(set_args)
 
@@ -645,6 +651,8 @@ def parse_arguments() -> dict:
 my_proj = None
 if __name__ == "__main__":
     arguments = parse_arguments()
+
+    print(arguments)
 
     main(**arguments)
 # %%

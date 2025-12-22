@@ -100,6 +100,24 @@ class AudiobookProject:
         override_metadata: Dict[str, Any] = {},
     ) -> None:
 
+        # Load an old project or make dir for new project
+        self.init_dir(init_path)
+
+        # Make Book
+        self.set_state_book_metadata(override_metadata)
+        self.init_book()
+
+        # Make Lexicon
+        self.init_lexicon(lex_g2g_paths, lex_g2p_paths)
+
+        # Store TTS parameters
+        self.set_state_tts(tts_voice, tts_speed)
+
+        # Mark init completed and save progress
+        self.complete["init"] = True
+        self.save_state()
+
+    def init_dir(self, init_path):
         init_path = Path(init_path)
 
         if init_path.is_dir():
@@ -141,18 +159,6 @@ class AudiobookProject:
                 raise Exception(f"{init_path} is not an EPUB")
         else:
             raise Exception(f"{init_path} is not a valid starting path.")
-
-        # Make Book
-        self.set_state_book_metadata(override_metadata)
-        self.init_book()
-
-        # Make Lexicon
-        self.init_lexicon(lex_g2g_paths, lex_g2p_paths)
-        self.set_state_tts(tts_voice, tts_speed)
-
-        # Mark init completed and save progress
-        self.complete["init"] = True
-        self.save_state()
 
     def make_splits(self):
         """

@@ -249,7 +249,6 @@ class AudiobookProject:
 
     def init_book(self):
         epub_path = self.dir / self.epub
-        print(self.state)
         self.book = Book(epub_path)
         state_overrides = {
             k: self.state[k] for k in ["title", "author", "series"] if self.state[k]
@@ -491,6 +490,7 @@ class AudioChapter:
     title: Optional[str] = None
     audio_file: Optional[Path | str] = None
     duration: Optional[int] = None
+    hash: Optional[int] = None  # hash of input text + TTS params
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -501,16 +501,18 @@ class AudioChapter:
 
 
 class AudioProcessor:
+    # TODO: Plan and implement
+
     def __init__(self, splits: list[AudioChapter] = []):
         pass
 
     def add_split(self):
         pass
 
-    # needs more shape
-
 
 class TTSProcessor:
+    # TODO: Plan and implement
+
     pipeline: KPipelineLazy
 
     def __init__(
@@ -537,62 +539,3 @@ class TTSProcessor:
             }
             PIPELINE = KPipelineLazy(**(defaults | pipeline_args))
             self.pipeline = PIPELINE
-
-    # def generate_sound_files(self, overwrite=False):
-    #     # TODO: Make skipping more efficient by reading data rather than wiping it
-    #     self.data["chapters"] = []
-    #     self.data["generated"] = False
-
-    #     # Swap out G2P
-    #     stock_g2p = self.pipeline.g2p
-    #     self.pipeline.g2p = self.lexicon_g2p(stock_g2p)
-
-    #     for i, chapter in enumerate(self.book.chapters):
-
-    #         output_path = self.project_dir_path / f"split-{i}.wav"
-
-    #         if (not output_path.exists()) or overwrite:
-    #             sr = 24000
-    #             split_pattern = r"\n+"
-    #             generator = self.pipeline(
-    #                 chapter.text,
-    #                 voice=self.data["voice"],
-    #                 speed=self.data["speed"],
-    #                 split_pattern=split_pattern,
-    #             )
-    #             audio_clips = []
-
-    #             segments = [
-    #                 s for s in re.split(split_pattern, chapter.text) if s.strip()
-    #             ]
-    #             segment_word_counts = [len(seg.split()) for seg in segments]
-    #             total_words = sum(segment_word_counts)
-    #             word_pbar = tqdm(total=total_words, desc=chapter.title, unit="words")
-    #             word_count_iter = iter(segment_word_counts)
-    #             for gph, phn, snd in generator:
-    #                 if type(snd) in [torch.FloatTensor, torch.Tensor]:
-    #                     audio_clips.append(snd.detach().cpu().numpy())
-    #                 word_pbar.update(next(word_count_iter, 0))
-    #             word_pbar.close()
-    #             full_audio = np.concat(audio_clips)  # TODO: join with adustable gap
-    #             sf.write(output_path, full_audio, sr)
-    #         else:
-    #             print(f"Chapter[{i}] output exists, skipping.")
-    #             full_audio, sr = sf.read(str(output_path))
-
-    #         self.data["chapters"].append(
-    #             {
-    #                 "number": i + 1,
-    #                 "title": chapter.title,
-    #                 "length": int(
-    #                     1000 * len(full_audio) / sr,
-    #                 ),
-    #                 "path": str(output_path.resolve()),
-    #             }
-    #         )
-
-    #     # Restore original G2P
-    #     self.pipeline.g2p = stock_g2p
-
-    #     self.data["generated"] = True
-    #     self.write_data_file()

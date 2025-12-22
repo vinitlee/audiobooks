@@ -145,59 +145,55 @@ class AudiobookProject:
         # Make Book
         self.set_state_book_metadata(override_metadata)
         self.init_book()
-        print(self.state)
+
         # Make Lexicon
         self.init_lexicon(lex_g2g_paths, lex_g2p_paths)
         self.set_state_tts(tts_voice, tts_speed)
 
+        # Mark init completed and save progress
         self.complete["init"] = True
         self.save_state()
 
     def make_splits(self):
+        """
+        For each chapter
+            Generates TTS
+            Saves split wav
+            Log split data
+        """
         tts_processor = TTSProcessor(self.lexicon)
         self.complete["splits"] = True
         self.save_state()
 
-    def load_state(self):
-        linked = ["progress", "tts"]
-        yaml_stream = (self.dir / self.statestore).open("r", encoding="utf-8")
+    def make_master(self):
+        """
+        Combine all raw splits into a compressed master file
+        Process like normalizing volume, compression, etc
+        """
+        pass
 
-        loaded = yaml.load(yaml_stream, yaml.FullLoader)
-        self.state |= self.valid_dict(loaded, blacklist=linked)
-        # Assign linked entries
-        self.complete |= loaded.get("progress", {})
-        self.set_state_tts(
-            **self.valid_dict(loaded["tts"], whitelist=["voice", "speed"])
-        )
+    def make_m4b(self):
+        """
+        Turns master file into m4b
+        Generates needed helper files
+        Saves m4b
+        """
+        pass
 
-    @property
-    def epub(self) -> str:
-        fromstate = self.get_state("book/epub")
-        if fromstate is None:
-            found = self.find_epub()
-            if found:
-                self.epub = found
-                print(self.state)
-                return found
-            else:
-                raise Exception("EPUB could not be found")
-        return str(fromstate)
+    def copy_to_library(self):
+        """
+        (Optional)
+        Copies m4b (and epub) to the library location
+        """
+        pass
 
-    @epub.setter
-    def epub(self, val):
-        self.set_state("book/epub", val)
+    def run(self):
+        self.make_splits()
+        self.make_master()
+        self.make_m4b()
+        self.copy_to_library()
 
-    def get_state(self, path: str):
-        return dpath.util.get(self.state, path, default=None)
-
-    def set_state(self, path: Union[str, list[str]], val: Any):
-        return dpath.util.new(self.state, path, val)
-
-    def save_state(self):
-        self.set_state("saved", datetime.datetime.now())
-        yaml_stream = (self.dir / self.statestore).open("w", encoding="utf-8")
-        yaml.dump(self.state, yaml_stream, allow_unicode=True, sort_keys=False)
-        yaml_stream.close()
+    # ------------------------------------------------------------------------
 
     @staticmethod
     def valid_dict(
@@ -217,54 +213,33 @@ class AudiobookProject:
 
         return {k: v for k, v in d.items() if is_valid(k, v)}
 
-    def set_state_tts(self, voice: Optional[str] = None, speed: Optional[float] = None):
-        newstate = self.valid_dict({"voice": voice, "speed": speed})
-        self.state["tts"] = self.tts_params | newstate
+    # -- State --
 
-    @property
-    def tts_params(self):
-        return self.state.get("tts", {})
+    def get_state(self, path: str):
+        return dpath.util.get(self.state, path, default=None)
 
-    def set_state_lexicon_sources(
-        self, g2g: list[str] = [], g2p: list[str] = [], add_to=True
-    ):
-        if add_to:
-            current = self.lexicon_sources
-            g2g += current.get("g2g", [])
-            g2p += current.get("g2p", [])
+    def set_state(self, path: Union[str, list[str]], val: Any):
+        return dpath.util.new(self.state, path, val)
 
-        # Fully resolve all paths and store as strings
-        g2g = [str(Path(p).expanduser().resolve()) for p in g2g]
-        g2p = [str(Path(p).expanduser().resolve()) for p in g2p]
+    def save_state(self):
+        self.set_state("saved", datetime.datetime.now())
+        yaml_stream = (self.dir / self.statestore).open("w", encoding="utf-8")
+        yaml.dump(self.state, yaml_stream, allow_unicode=True, sort_keys=False)
+        yaml_stream.close()
 
-        # Only keep unique
-        g2g = list(set(g2g))
-        g2p = list(set(g2p))
-        newstate = {
-            "g2g": g2g,
-            "g2p": g2p,
-        }
-        self.state["lexicon"] |= self.valid_dict(newstate)
+    def load_state(self):
+        linked = ["progress", "tts"]
+        yaml_stream = (self.dir / self.statestore).open("r", encoding="utf-8")
 
-    @property
-    def lexicon_sources(self):
-        return self.state.get("lexicon", {})
+        loaded = yaml.load(yaml_stream, yaml.FullLoader)
+        self.state |= self.valid_dict(loaded, blacklist=linked)
+        # Assign linked entries
+        self.complete |= loaded.get("progress", {})
+        self.set_state_tts(
+            **self.valid_dict(loaded["tts"], whitelist=["voice", "speed"])
+        )
 
-    def set_state_book_metadata(self, mapping: dict[str, str | None]):
-        valid_keys = ["title", "author", "series"]
-        self.state.update(self.valid_dict(mapping, whitelist=valid_keys))
-
-    def get_state_book_metdata(self):
-        valid_keys = ["title", "author", "series"]
-        return {k: self.state[k] for k in valid_keys if self.state[k]}
-
-    def find_epub(self):
-        epubs = list(self.dir.glob("*.epub"))
-        # If there is an EPUB in the directory
-        if len(epubs):
-            if len(epubs) > 1:
-                warnings.warn("There seem to be multiple EPUBs.")
-            return epubs[0].name
+    # -- Book --
 
     def init_book(self):
         epub_path = self.dir / self.epub
@@ -286,6 +261,50 @@ class AudiobookProject:
 
         self.save_state()
 
+    @property
+    def epub(self) -> str:
+        fromstate = self.get_state("book/epub")
+        if fromstate is None:
+            found = self.find_epub()
+            if found:
+                self.epub = found
+                return found
+            else:
+                raise Exception("EPUB could not be found")
+        return str(fromstate)
+
+    @epub.setter
+    def epub(self, val):
+        self.set_state("book/epub", val)
+
+    def find_epub(self):
+        epubs = list(self.dir.glob("*.epub"))
+        # If there is an EPUB in the directory
+        if len(epubs):
+            if len(epubs) > 1:
+                warnings.warn("There seem to be multiple EPUBs.")
+            return epubs[0].name
+
+    def set_state_book_metadata(self, mapping: dict[str, str | None]):
+        valid_keys = ["title", "author", "series"]
+        self.state.update(self.valid_dict(mapping, whitelist=valid_keys))
+
+    def get_state_book_metdata(self):
+        valid_keys = ["title", "author", "series"]
+        return {k: self.state[k] for k in valid_keys if self.state[k]}
+
+    # -- TTS --
+
+    @property
+    def tts_params(self):
+        return self.state.get("tts", {})
+
+    def set_state_tts(self, voice: Optional[str] = None, speed: Optional[float] = None):
+        newstate = self.valid_dict({"voice": voice, "speed": speed})
+        self.state["tts"] = self.tts_params | newstate
+
+    # -- Lexicon --
+
     def init_lexicon(
         self,
         g2g_paths: list[str] = [],
@@ -293,12 +312,37 @@ class AudiobookProject:
     ):
         g2g_paths.extend(self.lexicon_sources.get("g2g", []))
         g2p_paths.extend(self.lexicon_sources.get("g2p", []))
-        # self.set_state_lexicon_sources()
         # Instantiate Lexicon
         self.lexicon = Lexicon(g2g_paths, g2p_paths)
         self.set_state_lexicon_sources(
-            self.lexicon.g2g_paths, self.lexicon.g2p_paths, add_to=False
+            self.lexicon.g2g_paths, self.lexicon.g2p_paths, append=False
         )
+
+    @property
+    def lexicon_sources(self):
+        return self.state.get("lexicon", {})
+
+    def set_state_lexicon_sources(
+        self, g2g: list[str] = [], g2p: list[str] = [], append=True
+    ):
+        if append:
+            # Keep old sources and just add the new ones
+            current = self.lexicon_sources
+            g2g += current.get("g2g", [])
+            g2p += current.get("g2p", [])
+
+        # Fully resolve all paths and store as strings
+        g2g = [str(Path(p).expanduser().resolve()) for p in g2g]
+        g2p = [str(Path(p).expanduser().resolve()) for p in g2p]
+
+        # Only keep unique
+        g2g = list(set(g2g))
+        g2p = list(set(g2p))
+        newstate = {
+            "g2g": g2g,
+            "g2p": g2p,
+        }
+        self.state["lexicon"] |= self.valid_dict(newstate)
 
 
 class Lexicon:

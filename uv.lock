@@ -64,6 +64,7 @@ name = "audiobooks"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
+    { name = "dpath" },
     { name = "ebooklib" },
     { name = "ipykernel" },
     { name = "ipython" },
@@ -91,6 +92,7 @@ cu128 = [
 
 [package.metadata]
 requires-dist = [
+    { name = "dpath", specifier = ">=2.2.0" },
     { name = "ebooklib", specifier = ">=0.20" },
     { name = "ipykernel", specifier = ">=7.1.0" },
     { name = "ipython", specifier = ">=9.7.0" },
@@ -533,6 +535,15 @@ name = "docopt"
 version = "0.6.2"
 source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/a2/55/8f8cab2afd404cf578136ef2cc5dfb50baa1761b68c9da1fb1e4eed343c9/docopt-0.6.2.tar.gz", hash = "sha256:49b3a825280bd66b3aa83585ef59c4a8c82f2c8a522dbe754a8bc8d08c85c491", size = 25901, upload-time = "2014-06-16T11:18:57.406Z" }
+
+[[package]]
+name = "dpath"
+version = "2.2.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/b5/ce/e1fd64d36e4a5717bd5e6b2ad188f5eaa2e902fde871ea73a79875793fc9/dpath-2.2.0.tar.gz", hash = "sha256:34f7e630dc55ea3f219e555726f5da4b4b25f2200319c8e6902c394258dd6a3e", size = 28266, upload-time = "2024-06-12T22:08:03.686Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/05/d1/8952806fbf9583004ab479d8f58a9496c3d35f6b6009ddd458bdd9978eaf/dpath-2.2.0-py3-none-any.whl", hash = "sha256:b330a375ded0a0d2ed404440f6c6a715deae5313af40bbb01c8a41d891900576", size = 17618, upload-time = "2024-06-12T22:08:01.881Z" },
+]
 
 [[package]]
 name = "ebooklib"
@@ -1412,7 +1423,7 @@ name = "nvidia-cudnn-cu12"
 version = "9.10.2.21"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "nvidia-cublas-cu12", marker = "extra == 'extra-10-audiobooks-cu128'" },
+    { name = "nvidia-cublas-cu12", marker = "(sys_platform != 'darwin' and extra == 'extra-10-audiobooks-cu128') or (extra == 'extra-10-audiobooks-cpu' and extra == 'extra-10-audiobooks-cu128')" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/fa/41/e79269ce215c857c935fd86bcfe91a451a584dfc27f1e068f568b9ad1ab7/nvidia_cudnn_cu12-9.10.2.21-py3-none-manylinux_2_27_aarch64.whl", hash = "sha256:c9132cc3f8958447b4910a1720036d9eff5928cc3179b0a51fb6d167c6cc87d8", size = 705026878, upload-time = "2025-06-06T21:52:51.348Z" },
@@ -1425,7 +1436,7 @@ name = "nvidia-cufft-cu12"
 version = "11.3.3.83"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "nvidia-nvjitlink-cu12", marker = "extra == 'extra-10-audiobooks-cu128'" },
+    { name = "nvidia-nvjitlink-cu12", marker = "(sys_platform != 'darwin' and extra == 'extra-10-audiobooks-cu128') or (extra == 'extra-10-audiobooks-cpu' and extra == 'extra-10-audiobooks-cu128')" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/60/bc/7771846d3a0272026c416fbb7e5f4c1f146d6d80704534d0b187dd6f4800/nvidia_cufft_cu12-11.3.3.83-py3-none-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:848ef7224d6305cdb2a4df928759dca7b1201874787083b6e7550dd6765ce69a", size = 193109211, upload-time = "2025-03-07T01:44:56.873Z" },
@@ -1457,9 +1468,9 @@ name = "nvidia-cusolver-cu12"
 version = "11.7.3.90"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "nvidia-cublas-cu12", marker = "extra == 'extra-10-audiobooks-cu128'" },
-    { name = "nvidia-cusparse-cu12", marker = "extra == 'extra-10-audiobooks-cu128'" },
-    { name = "nvidia-nvjitlink-cu12", marker = "extra == 'extra-10-audiobooks-cu128'" },
+    { name = "nvidia-cublas-cu12", marker = "(sys_platform != 'darwin' and extra == 'extra-10-audiobooks-cu128') or (extra == 'extra-10-audiobooks-cpu' and extra == 'extra-10-audiobooks-cu128')" },
+    { name = "nvidia-cusparse-cu12", marker = "(sys_platform != 'darwin' and extra == 'extra-10-audiobooks-cu128') or (extra == 'extra-10-audiobooks-cpu' and extra == 'extra-10-audiobooks-cu128')" },
+    { name = "nvidia-nvjitlink-cu12", marker = "(sys_platform != 'darwin' and extra == 'extra-10-audiobooks-cu128') or (extra == 'extra-10-audiobooks-cpu' and extra == 'extra-10-audiobooks-cu128')" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/c8/32/f7cd6ce8a7690544d084ea21c26e910a97e077c9b7f07bf5de623ee19981/nvidia_cusolver_cu12-11.7.3.90-py3-none-manylinux_2_27_aarch64.whl", hash = "sha256:db9ed69dbef9715071232caa9b69c52ac7de3a95773c2db65bdba85916e4e5c0", size = 267229841, upload-time = "2025-03-07T01:46:54.356Z" },
@@ -1472,7 +1483,7 @@ name = "nvidia-cusparse-cu12"
 version = "12.5.8.93"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "nvidia-nvjitlink-cu12", marker = "extra == 'extra-10-audiobooks-cu128'" },
+    { name = "nvidia-nvjitlink-cu12", marker = "(sys_platform != 'darwin' and extra == 'extra-10-audiobooks-cu128') or (extra == 'extra-10-audiobooks-cpu' and extra == 'extra-10-audiobooks-cu128')" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/bc/f7/cd777c4109681367721b00a106f491e0d0d15cfa1fd59672ce580ce42a97/nvidia_cusparse_cu12-12.5.8.93-py3-none-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:9b6c161cb130be1a07a27ea6923df8141f3c295852f4b260c65f18f3e0a091dc", size = 288117129, upload-time = "2025-03-07T01:47:40.407Z" },

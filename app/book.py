@@ -46,6 +46,10 @@ class Book:
             f"{self.meta.title} by {self.meta.creator}",
         )
 
+    @property
+    def fulltext(self, delimiter: str = "", chapter_delimiter: str = ""):
+        return delimiter.join([c.fulltext(chapter_delimiter) for c in self.chapters])
+
     def __repr__(self) -> str:
         return f"{self.meta.title}: {len(self.chapters)} chapters"
 

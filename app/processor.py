@@ -213,6 +213,8 @@ class Lexicon:
 
         return g2p_fn
 
+    # TODO: Consider adding a fallback function that logs uncommon words not in g2p to class variable
+
     def g2g2p(
         self, stock_g2p: Callable[[str], Tuple[str, List[MToken]]]
     ) -> Callable[[str], Tuple[str, List[MToken]]]:

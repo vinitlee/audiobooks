@@ -47,7 +47,9 @@ import warnings
 from tqdm import tqdm
 import traceback
 
-from book import Book, Chapter
+from book import Book
+from tts import Lexicon, TTSProcessor, KPipelineLazy
+from audio import AudioChapter, AudioProcessor
 
 # %%
 

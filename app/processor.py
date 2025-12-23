@@ -1,4 +1,5 @@
 # %%
+# Typing
 from __future__ import annotations
 from typing import TYPE_CHECKING, cast, overload
 
@@ -17,36 +18,48 @@ if TYPE_CHECKING:
         Sequence,
     )
 
+# Debugging
 from line_profiler import profile
+
+# Filesystem
 from pathlib import Path
-import glob
 from pathvalidate import sanitize_filepath
-import json
-import re
+import glob
+
+# OS
 import subprocess
-import datetime
 import shutil
-from dataclasses import dataclass
+import argparse
+
+# Text
+import re
+import yaml
+import datetime
+
+# Objects
 import dpath.util
+from dataclasses import dataclass
 from functools import lru_cache
 
-import argparse
-import yaml
-
+# Math
 import numpy as np
 import cv2
-
 import torch
+
+# Media
 import soundfile as sf
 
+# ffmpeg
 from ebooklib import epub
 import ebooklib
 import lxml.html
 
+# UI
 import warnings
 from tqdm import tqdm
 import traceback
 
+# Project Libraries
 from book import Book
 from tts import Lexicon, TTSProcessor, KPipelineLazy
 from audio import AudioChapter, AudioProcessor
@@ -353,199 +366,3 @@ class AudiobookProject:
             "g2p": g2p,
         }
         self.state["lexicon"] |= self.valid_dict(newstate)
-
-
-class Lexicon:
-    g2g_map: dict[str, str] = {}
-    g2p_map: dict[str, str] = {}
-    g2g_paths: list[str] = []
-    g2p_paths: list[str] = []
-    _valid_suffixes = [".yaml"]
-
-    def __init__(
-        self,
-        g2g_paths: list[str] = [],
-        g2p_paths: list[str] = [],
-    ) -> None:
-        self.set_maps(g2g_paths, g2p_paths)
-
-    def set_maps(
-        self,
-        g2g_paths: list[str] = [],
-        g2p_paths: list[str] = [],
-    ):
-        self.g2g_paths = []
-        self.g2p_paths = []
-        self.g2g_map = {}
-        self.g2p_map = {}
-        self.extend_maps(g2g_paths, g2p_paths)
-
-    def extend_maps(
-        self,
-        g2g_paths: list[str] = [],
-        g2p_paths: list[str] = [],
-    ):
-        # Add to current (may be blank)
-        self.g2g_paths.extend(set(g2g_paths))
-        self.g2p_paths.extend(set(g2p_paths))
-
-        self.g2g_paths = self.filter_valid_paths(self.g2g_paths)
-        self.g2p_paths = self.filter_valid_paths(self.g2p_paths)
-
-        self.g2g_map = self.map_from_yaml(self.g2g_paths)
-        self.g2p_map = self.map_from_yaml(self.g2p_paths)
-
-    def filter_valid_paths(self, paths: list[str]) -> list[str]:
-        p_paths = [Path(p).expanduser().resolve() for p in paths if p]
-        p_paths = [
-            p for p in p_paths if p.is_file() and p.suffix in self._valid_suffixes
-        ]
-        unique_paths = list(set([str(p) for p in p_paths]))
-        return unique_paths
-
-    def map_from_yaml(self, paths: list[str]):
-        mapping = {}
-        for p in paths:
-            file = Path(p)
-            if file.suffix in self._valid_suffixes:
-                mapping |= yaml.safe_load(file.open("r", encoding="utf-8"))
-        return mapping
-
-    def g2g(self, string: str) -> str:
-        for k, v in self.g2g_map.items():
-            string = re.sub(k, v, string)
-        return string
-
-    def g2p(
-        self, stock_g2p: Callable[[str], tuple[Iterable, Iterable]]
-    ) -> Callable[[str], tuple[Iterable, Iterable]]:
-        def g2p_fn(text: str) -> tuple[Iterable, Iterable]:
-            gs, tokens = stock_g2p(text)
-
-            if tokens is not None:
-                for t in tokens:
-                    k = t.text.lower()
-                    if k in self.g2g_map:
-                        t.phonemes = self.g2g_map[k]
-
-            return gs, tokens
-
-        return g2p_fn
-
-    # TODO: Consider adding a fallback function that logs uncommon words not in g2p to class variable
-
-    def g2g2p(
-        self, stock_g2p: Callable[[str], Tuple[str, List[MToken]]]
-    ) -> Callable[[str], Tuple[str, List[MToken]]]:
-        """
-        Closure that modifies an input g2p function from your KPipeline
-        to first apply g2g lexicon mappings, run the original g2p,
-        and then apply corrections with the g2p mappings per-token
-        """
-
-        def g2g2p_fn(text: str) -> Tuple[str, List[MToken]]:
-            text = self.g2g(text)
-
-            gs, tokens = stock_g2p(text)
-
-            if tokens is not None:
-                for t in tokens:
-                    k = t.text.lower()
-                    if k in self.g2g_map:
-                        t.phonemes = self.g2g_map[k]
-
-            return gs, tokens
-
-        return g2g2p_fn
-
-    def to_dict(self):
-        return {
-            "g2g": self.g2g_paths,
-            "g2p": self.g2p_paths,
-        }
-
-
-class KPipelineLazy:
-    g2p: Callable[[str], Tuple[str, List[MToken]]]
-
-    def __init__(self, *args, **kwargs):
-        self.args = args
-        self.kwargs = kwargs
-        self._obj = None
-
-    def load(self):
-        if self._obj is None:
-            from kokoro import KPipeline
-
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore", UserWarning)
-                warnings.simplefilter("ignore", FutureWarning)
-                self._obj = KPipeline(*self.args, **self.kwargs)
-        return self._obj
-
-    @classmethod
-    @lru_cache(maxsize=1)
-    def instance(cls) -> KPipelineLazy:
-        return cls()
-
-    def __getattr__(self, name: str) -> profile:
-        return getattr(self.load(), name)
-
-    def __call__(self, *args, **kwargs):
-        return self.load()(*args, **kwargs)
-
-
-@dataclass
-class AudioChapter:
-    title: Optional[str] = None
-    audio_file: Optional[Path | str] = None
-    duration: Optional[int] = None
-    hash: Optional[int] = None  # hash of input text + TTS params
-
-    def to_dict(self) -> Dict[str, Any]:
-        return {
-            "title": self.title,
-            "audio_file": str(self.audio_file),
-            "duration": self.duration,
-        }
-
-
-class AudioProcessor:
-    # TODO: Plan and implement
-
-    def __init__(self, splits: list[AudioChapter] = []):
-        pass
-
-    def add_split(self):
-        pass
-
-
-class TTSProcessor:
-    # TODO: Plan and implement
-
-    pipeline: KPipelineLazy
-
-    def __init__(
-        self,
-        lexicon: Lexicon,
-        pipeline_args: dict = {},
-    ) -> None:
-
-        self.init_pipeline(pipeline_args)
-
-    def init_pipeline(self, pipeline_args):
-        defaults = {
-            "lang_code": "a",
-            "device": "cuda",
-            "repo_id": "hexgrad/Kokoro-82M",
-        }
-        if not torch.cuda.is_available():
-            defaults["device"] = "cpu"
-
-        self.pipeline = KPipelineLazy.instance(**(defaults | pipeline_args))
-
-    def chapter_to_split(self, chapter: Chapter) -> AudioChapter:
-        pass
-
-
-# %%

@@ -22,6 +22,9 @@ from pathlib import Path
 import yaml
 import re
 
+import torch
+from functools import lru_cache
+
 # %%
 
 
@@ -150,6 +153,11 @@ class KPipelineLazy:
                 self._obj = KPipeline(*self.args, **self.kwargs)
         return self._obj
 
+    @classmethod
+    @lru_cache(maxsize=1)
+    def instance(cls) -> KPipelineLazy:
+        return cls()
+
     def __getattr__(self, name: str):
         return getattr(self.load(), name)
 
@@ -167,27 +175,20 @@ class TTSProcessor:
     def __init__(
         self,
         lexicon: Lexicon,
-        pipeline_external: Optional[KPipelineLazy] = None,
         pipeline_args: dict = {},
     ) -> None:
-        if pipeline_external is not None:
-            self.pipeline = pipeline_external
-        else:
-            self.init_pipeline(pipeline_args)
+        self.init_pipeline(pipeline_args)
 
     def init_pipeline(self, pipeline_args):
-        global PIPELINE
-        try:
-            if not isinstance(PIPELINE, KPipelineLazy):  # type: ignore
-                raise Exception("PIPELINE unbound")
-        except:
-            defaults = {
-                "lang_code": "a",
-                "device": "cuda",
-                "repo_id": "hexgrad/Kokoro-82M",
-            }
-            PIPELINE = KPipelineLazy(**(defaults | pipeline_args))
-            self.pipeline = PIPELINE
+        defaults = {
+            "lang_code": "a",
+            "device": "cuda",
+            "repo_id": "hexgrad/Kokoro-82M",
+        }
+        if not torch.cuda.is_available():
+            defaults["device"] = "cpu"
+
+        self.pipeline = KPipelineLazy.instance(**(defaults | pipeline_args))
 
     def dump_unknown_words(self):
         pass

@@ -171,6 +171,13 @@ class TTSProject:
                     word_pbar.update(next(word_count_iter, 0))
                 word_pbar.close()
                 full_audio = np.concat(audio_clips)  # TODO: join with adustable gap
+                scale = 1.175
+                max_scale = 1 / max(abs(full_audio.min()), abs(full_audio.max()))
+                # if max_scale < scale:
+                #     print("Choosing lower scale: ", max_scale)
+                scale = min(scale, max_scale)
+                print(scale, max_scale)
+                full_audio *= scale
                 sf.write(output_path, full_audio, sr)
             else:
                 print(f"Chapter[{i}] output exists, skipping.")
@@ -661,7 +668,7 @@ def parse_arguments() -> dict:
     for p in set_args["files"]:
         g = glob.glob(str(Path(p).expanduser().resolve()))
         expanded_paths = expanded_paths.union(g)
-    set_args["files"] = expanded_paths
+    set_args["files"] = sorted(expanded_paths)
     # print(set_args)
 
     return set_args

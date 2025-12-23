@@ -75,6 +75,7 @@ pipeline = KPipeline(lang_code="a", device="cuda", repo_id=KOKORO_MODEL)
 
 
 def pronounce(grapheme: str | None = None, phoneme: str | None = None, verbose=True):
+    global temp
     pronounce_str: str = ""
     if phoneme is None:
         if not grapheme:
@@ -87,6 +88,7 @@ def pronounce(grapheme: str | None = None, phoneme: str | None = None, verbose=T
         if verbose:
             print(f'pronounce("{gs}","{ps}")')
             print(f'"{gs}":"{ps}",')
+        temp = audio
         display(Audio(data=audio, rate=24000, autoplay=False))
 
 

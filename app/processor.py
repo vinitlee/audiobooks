@@ -28,6 +28,7 @@ import datetime
 import shutil
 from dataclasses import dataclass
 import dpath.util
+from functools import lru_cache
 
 import argparse
 import yaml
@@ -35,16 +36,18 @@ import yaml
 import numpy as np
 import cv2
 
+import torch
 import soundfile as sf
 
 from ebooklib import epub
 import ebooklib
+import lxml.html
 
 import warnings
 from tqdm import tqdm
 import traceback
 
-from book import Book
+from book import Book, Chapter
 
 # %%
 
@@ -478,6 +481,11 @@ class KPipelineLazy:
                 self._obj = KPipeline(*self.args, **self.kwargs)
         return self._obj
 
+    @classmethod
+    @lru_cache(maxsize=1)
+    def instance(cls) -> KPipelineLazy:
+        return cls()
+
     def __getattr__(self, name: str) -> profile:
         return getattr(self.load(), name)
 
@@ -518,24 +526,24 @@ class TTSProcessor:
     def __init__(
         self,
         lexicon: Lexicon,
-        pipeline_external: Optional[KPipelineLazy] = None,
         pipeline_args: dict = {},
     ) -> None:
-        if pipeline_external is not None:
-            self.pipeline = pipeline_external
-        else:
-            self.init_pipeline(pipeline_args)
+
+        self.init_pipeline(pipeline_args)
 
     def init_pipeline(self, pipeline_args):
-        global PIPELINE
-        try:
-            if not isinstance(PIPELINE, KPipelineLazy):  # type: ignore
-                raise Exception("PIPELINE unbound")
-        except:
-            defaults = {
-                "lang_code": "a",
-                "device": "cuda",
-                "repo_id": "hexgrad/Kokoro-82M",
-            }
-            PIPELINE = KPipelineLazy(**(defaults | pipeline_args))
-            self.pipeline = PIPELINE
+        defaults = {
+            "lang_code": "a",
+            "device": "cuda",
+            "repo_id": "hexgrad/Kokoro-82M",
+        }
+        if not torch.cuda.is_available():
+            defaults["device"] = "cpu"
+
+        self.pipeline = KPipelineLazy.instance(**(defaults | pipeline_args))
+
+    def chapter_to_split(self, chapter: Chapter) -> AudioChapter:
+        pass
+
+
+# %%

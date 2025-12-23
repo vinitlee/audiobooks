@@ -57,6 +57,13 @@ Init should do everything needed for the project to be reopened without any argu
 - Restore original g2p
 - split flag True
 
+- get chapter iter from book
+  - get tag iter from chapter
+    - ...
+    - Do special actions for special tags
+
+Basically, TTS probably wants tags, not strings, in order to be able to make better decisions
+
 ### Master
 
 - generate ffmpeg concat file

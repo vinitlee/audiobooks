@@ -424,7 +424,9 @@ class TextBook:
         explicit_spine = [
             self.book.get_item_with_id(iid).file_name for iid, _ in self.book.spine
         ]
-        range_indices = [explicit_spine.index(el.href) for el in self.book.toc]
+        range_indices = [
+            explicit_spine.index(el.href.split("#")[0]) for el in self.book.toc
+        ]
         # Groups of chapters that correspond with the TOC entries
         href_groups = [
             explicit_spine[slice(*i)]

@@ -11,7 +11,7 @@ import yaml
 import argparse
 import glob
 
-from processor import AudiobookProject
+from project import AudiobookProject
 
 from pathlib import Path
 

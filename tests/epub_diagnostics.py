@@ -8,7 +8,7 @@ import lxml.html
 
 import re
 
-epub_path = r"../books/Ascendance of a Bookworm - Volume 02 [J-Novel Club][Premium]/Ascendance of a Bookworm - Volume 02 [J-Novel Club][Premium].epub"
+epub_path = r"../test_data/current/childrens-literature/childrens-literature.epub"
 # epub_path = r"..\books\Mushoku Tensei - Volume 26 [Seven Seas][Kobo]\Mushoku Tensei - Volume 26 [Seven Seas][Kobo].epub"
 my_epub = epub.read_epub(epub_path)
 

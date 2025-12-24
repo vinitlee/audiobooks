@@ -9,6 +9,8 @@ import glob
 import re
 import warnings
 
+from itertools import chain
+
 # import json
 # import yaml
 
@@ -19,16 +21,24 @@ from ebooklib import epub
 import ebooklib
 import lxml.html
 
+from utils import flatten_deep
+
 
 class Book:
+    epub: epub.EpubBook
+    epub_path: Path
+    meta: BookMetadata
+    chapters: list[Chapter]
+
     def __init__(
         self,
         epub_path: Path | str,
     ):
+        self.epub_path = Path(epub_path)
         self.epub = epub.read_epub(epub_path)
 
         self.meta = BookMetadata(self.epub)
-        self.chapters: list[Chapter]
+
         self.init_chapters()
 
     def init_chapters(self):
@@ -38,16 +48,20 @@ class Book:
             for iid, _ in self.epub.spine
             if (it := self.epub.get_item_with_id(iid)) is not None
         ]
+        iter_toc = cast(list[epub.EpubItem], list(flatten_deep(self.epub.toc)))
+        flat_toc = [
+            toc_item for toc_item in iter_toc if isinstance(toc_item, epub.Link)
+        ]
         id_toc = [
             cast(epub.EpubItem, it).get_id()
-            for entry in self.epub.toc
+            for entry in flat_toc
             if (it := self.epub.get_item_with_href(entry.href.split("#")[0]))
             is not None
         ]
         # Also get TOC titles for later
         title_toc = [
             entry.title
-            for entry in self.epub.toc
+            for entry in flat_toc
             if (it := self.epub.get_item_with_href(entry.href.split("#")[0]))
             is not None
         ]
@@ -86,14 +100,18 @@ class Book:
 
 
 class BookMetadata:
+    get: Callable[[str, str], Any]
+    cover: np.ndarray
+    overrides: Dict[str, Any]
     _delim: str = ", "
-    _overrides: Dict[str, Any] = {}
+    _tags: set
 
     def __init__(self, epub_obj: epub.EpubBook):
         self.get = epub_obj.get_metadata
 
         # Esential attributes
         self.title = epub_obj.title
+        self.overrides = {}
 
         # Cover
         cover_items = list(epub_obj.get_items_of_type(ebooklib.ITEM_COVER))
@@ -128,8 +146,8 @@ class BookMetadata:
         return self.get_tag("author") or self.creator
 
     def get_tag(self, tag_name):
-        if tag_name in self._overrides:
-            return self._overrides.get(tag_name)
+        if tag_name in self.overrides:
+            return self.overrides.get(tag_name)
         entry = self.get("DC", tag_name)
         if entry and len(entry):
             vals, ids = zip(*entry)
@@ -141,7 +159,7 @@ class BookMetadata:
         return self.get_tag(name)
 
     def add_overrides(self, new_overrides: Dict[str, Any]):
-        self._overrides.update(new_overrides)
+        self.overrides.update(new_overrides)
 
 
 class ElementBlock:
@@ -159,20 +177,24 @@ class ElementBlock:
 
 
 class Chapter:
+    _doc: lxml.html.HtmlElement
+
     def __init__(self, title: str, items: list[epub.EpubItem]):
         self.title = title
 
-        self._doc: lxml.html.HtmlElement = lxml.html.document_fromstring(
-            items[0].get_content()
-        )
-        for item in items[1:]:
-            item_body = cast(
-                lxml.html.HtmlElement, lxml.html.document_fromstring(item.get_content())
-            ).body
-            self._doc.body.append(item_body)
+        self._doc = lxml.html.HtmlElement()
+
+        if len(items):
+            self._doc = lxml.html.document_fromstring(items[0].get_content())
+            for item in items[1:]:
+                item_body = cast(
+                    lxml.html.HtmlElement,
+                    lxml.html.document_fromstring(item.get_content()),
+                ).body
+                self._doc.body.append(item_body)
 
     def is_valid(self, min_length: int = 8) -> bool:
-        return len(self.blocks) >= min_length
+        return len(self.elements) >= min_length
 
     def append(self, text, tagname="p"):
         new_el = lxml.html.Element(tagname)
@@ -186,17 +208,14 @@ class Chapter:
         self._doc.body.insert(pos, new_el)
 
     @property
-    def blocks(self, match_tags: list[str] = ["p", "h1", "h2", "h3"], strip_empty=True):
-        return [
-            txt
-            for tag in self._doc.iter(tag=match_tags)
-            if (txt := tag.text_content()) or not strip_empty
-        ]
+    def blocks(self) -> list[str]:
+        return [el.text for el in self.elements]
 
     @property
-    def elements(
-        self, match_tags: list[str] = ["p", "h1", "h2", "h3"], strip_empty=False
-    ):
+    def elements(self) -> list[ElementBlock]:
+        match_tags: list[str] = ["p", "h1", "h2", "h3"]
+        strip_empty = False
+
         return [
             ElementBlock(tag)
             for tag in self._doc.iter(tag=match_tags)

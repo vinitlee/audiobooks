@@ -10,10 +10,12 @@ import yaml
 
 import argparse
 import glob
+import logging
 
 from project import AudiobookProject
 
 from pathlib import Path
+from utils import not_none_dict, clean_dict, ensure_list
 
 
 def main(
@@ -50,18 +52,11 @@ def main(
         proj.copy_to_library()
 
 
-def not_none_dict(d: dict):
-    return {k: v for k, v in d.items() if v is not None}
-
-
-def clean_dict(d: dict):
-    return {k: v for k, v in d.items() if v}
-
-
-def ensure_list(e):
-    if not isinstance(e, list):
-        return [e]
-    return e
+def set_log_level(loglevel):
+    numeric_level = getattr(logging, loglevel.upper(), None)
+    if not isinstance(numeric_level, int):
+        raise ValueError("Invalid log level: %s" % loglevel)
+    logging.basicConfig(level=numeric_level)
 
 
 def parse_config(config_path):
@@ -172,7 +167,15 @@ def parse_arguments() -> dict:
         metavar="PATH",
         help="Specify YAML config. YAML will be overridden by any cmd arguments.",
     )
+    parser.add_argument(
+        "--log",
+        type=str,
+        help="Set logging level. DEBUG, INFO, WARNING, ERROR, CRITICAL",
+    )
+
     args = parser.parse_args()
+
+    set_log_level(args.log)
 
     set_args = {}
 
@@ -202,10 +205,10 @@ def parse_arguments() -> dict:
         }
     )
 
-    print(set_args)
-    print(cmd_args)
-    print(cmd_metadata_overrides)
-    print(cmd_only_args)
+    logging.debug(set_args)
+    logging.debug(cmd_args)
+    logging.debug(cmd_metadata_overrides)
+    logging.debug(cmd_only_args)
 
     set_args.update(cmd_args)
     if not isinstance(set_args.get("metadata_overrides"), dict):

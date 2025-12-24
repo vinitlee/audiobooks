@@ -1,0 +1,19 @@
+title: Children's Literature
+author: Charles Madison Curry, Erle Elsworth Clippinger
+series: ''
+progress:
+  init: true
+  splits: true
+  join: false
+  m4b: false
+  copy: false
+book:
+  epub: childrens-literature.epub
+tts:
+  voice: am_michael
+  speed: 1
+lexicon:
+  g2g: []
+  g2p: []
+output: null
+saved: 2025-12-24 12:14:02.626518

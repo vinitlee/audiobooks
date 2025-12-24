@@ -60,33 +60,48 @@ import soundfile as sf
 import warnings
 from tqdm import tqdm
 import traceback
+import logging
 
 # Project Libraries
 from book import Book
 from tts import Lexicon, TTSProcessor, KPipelineLazy
 from audio import AudioChapter, AudioProcessor
+from utils import not_none_dict, clean_dict, ensure_list
 
 # %%
+
+
+class ProjectProgress:
+    def __init__(self, steps: list[str]):
+        self.progress = dict.fromkeys(steps, False)
+
+    @classmethod
+    def from_dict(cls, d: dict):
+        obj = cls([])
+        obj.progress = {k: bool(v) for k, v in d.items()}
+        return obj
+
+    def to_dict(self):
+        return self.progress
 
 
 class AudiobookProject:
     book: Book
     lexicon: Lexicon
-    override_metadata: Dict[str, Any]
     # Generation
     processor: TTSProcessor
-    # Paths
 
+    # Paths
     statestore: str = "project.yaml"
     fulltext: str = "fulltext.txt"
     cover: str = "cover.jpg"
     wavfiles: str = "files"
     ffmeta: str = "ffmetadata"
 
-    complete: dict[str, bool]
-    state: dict[str, Any]
+    complete: Dict[str, bool]
+    state: Dict[str, Any]
 
-    chapters: list[AudioChapter] = []
+    chapters: Optional[List[AudioChapter]] = None
 
     def __init__(
         self,
@@ -98,6 +113,7 @@ class AudiobookProject:
         override_metadata: Optional[Dict[str, Any]] = None,
         output_path: Optional[Path | str] = None,
     ) -> None:
+        logging.debug(f"Initializing project from {init_path}")
 
         self.init_vars()
 
@@ -131,17 +147,17 @@ class AudiobookProject:
                     # If there is a project.yaml
                     self.load_state()
                     set_up = True
-                    print("Loaded YAML")
+                    logging.debug("Loaded YAML")
                 except Exception as e:
                     traceback.print_exc()
                     set_up = False
-                    print("Failed to load YAML")
+                    logging.debug("Failed to load YAML")
             if not set_up:
                 # Fallback if loading project.yaml fails; it will be overwritten
                 found = self.find_epub()
                 if found:
                     self.epub = found
-                    print("Loaded as a fresh project")
+                    logging.debug("Loaded as a fresh project")
                 else:
                     raise Exception(
                         f"{init_path} is a directory but does not contain an EPUB."
@@ -255,6 +271,30 @@ class AudiobookProject:
 
     # -- State --
 
+    def restore_from_dict(self, d: dict):
+        pass
+
+    def to_dict(self):
+        d = {
+            # "title": None,
+            # "author": None,
+            # "series": None,
+            # "progress": self.progress.to_dict(),
+            # "book": {"epub": None},
+            # "tts": {
+            #     "voice": "am_michael",
+            #     "speed": 1.0,
+            # },
+            # "lexicon": {
+            #     "g2g": [],
+            #     "g2p": [],
+            # },
+            # "output": None,
+            # "saved": None,
+        }
+
+        return d
+
     def get_state(self, path: str):
         return dpath.util.get(self.state, path, default=None)
 
@@ -301,7 +341,6 @@ class AudiobookProject:
                 "series": self.book.meta.series,
             }
         )
-        print(self.book.meta.author)
 
     @property
     def epub(self) -> str:

@@ -27,32 +27,34 @@ from pathvalidate import sanitize_filepath
 import glob
 
 # OS
-import subprocess
-import shutil
-import argparse
+# import subprocess
+# import shutil
+# import argparse
 
 # Text
-import re
+# import re
 import yaml
 import datetime
 
 # Objects
 import dpath.util
-from dataclasses import dataclass
-from functools import lru_cache
+
+from dataclasses import dataclass, field
+
+# from functools import lru_cache
 
 # Math
-import numpy as np
-import cv2
-import torch
+# import numpy as np
+# import cv2
+# import torch
 
 # Media
 import soundfile as sf
 
 # ffmpeg
-from ebooklib import epub
-import ebooklib
-import lxml.html
+# from ebooklib import epub
+# import ebooklib
+# import lxml.html
 
 # UI
 import warnings
@@ -70,7 +72,7 @@ from audio import AudioChapter, AudioProcessor
 class AudiobookProject:
     book: Book
     lexicon: Lexicon
-    override_metadata: Dict[str, Any] = {}
+    override_metadata: Dict[str, Any]
     # Generation
     processor: TTSProcessor
     # Paths
@@ -81,42 +83,23 @@ class AudiobookProject:
     wavfiles: str = "files"
     ffmeta: str = "ffmetadata"
 
-    complete: dict[str, bool] = {
-        "init": False,
-        "splits": False,
-        "join": False,
-        "m4b": False,
-        "copy": False,
-    }
-
-    state: dict[str, Any] = {
-        "title": None,
-        "author": None,
-        "series": None,
-        "progress": complete,
-        "book": {"epub": None},
-        "tts": {
-            "voice": "am_michael",
-            "speed": 1.0,
-        },
-        "lexicon": {
-            "g2g": [],
-            "g2p": [],
-        },
-        "saved": None,
-    }
+    complete: dict[str, bool]
+    state: dict[str, Any]
 
     chapters: list[AudioChapter] = []
 
     def __init__(
         self,
         init_path: Path | str,
-        tts_voice: str | None = None,
-        tts_speed: float | None = None,
-        lex_g2g_paths: list[str] = [],
-        lex_g2p_paths: list[str] = [],
-        override_metadata: Dict[str, Any] = {},
+        tts_voice: Optional[str] = None,
+        tts_speed: Optional[float] = None,
+        lex_g2g_paths: Optional[List[str]] = None,
+        lex_g2p_paths: Optional[List[str]] = None,
+        override_metadata: Optional[Dict[str, Any]] = None,
+        output_path: Optional[Path | str] = None,
     ) -> None:
+
+        self.init_vars()
 
         # Load an old project or make dir for new project
         self.init_dir(init_path)
@@ -136,6 +119,7 @@ class AudiobookProject:
         self.save_state()
 
     def init_dir(self, init_path):
+        print("\n### Initializing Project ###")
         init_path = Path(init_path)
 
         if init_path.is_dir():
@@ -185,6 +169,7 @@ class AudiobookProject:
             Saves split wav
             Log split data
         """
+        print("\n### Making Splits ###")
         tts_processor = TTSProcessor(self.lexicon)
         self.complete["splits"] = True
         self.save_state()
@@ -194,6 +179,7 @@ class AudiobookProject:
         Combine all raw splits into a compressed master file
         Process like normalizing volume, compression, etc
         """
+        print("\n### Making Master ###")
         pass
 
     def make_m4b(self):
@@ -202,6 +188,7 @@ class AudiobookProject:
         Generates needed helper files
         Saves m4b
         """
+        print("\n### Making M4B ###")
         pass
 
     def copy_to_library(self):
@@ -218,6 +205,35 @@ class AudiobookProject:
         self.copy_to_library()
 
     # ------------------------------------------------------------------------
+
+    def init_vars(self):
+        self.complete = {
+            "init": False,
+            "splits": False,
+            "join": False,
+            "m4b": False,
+            "copy": False,
+        }
+
+        self.state = {
+            "title": None,
+            "author": None,
+            "series": None,
+            "progress": self.complete,
+            "book": {"epub": None},
+            "tts": {
+                "voice": "am_michael",
+                "speed": 1.0,
+            },
+            "lexicon": {
+                "g2g": [],
+                "g2p": [],
+            },
+            "output": None,
+            "saved": None,
+        }
+
+        self.override_metadata = {}
 
     @staticmethod
     def valid_dict(
@@ -251,6 +267,8 @@ class AudiobookProject:
         yaml.dump(self.state, yaml_stream, allow_unicode=True, sort_keys=False)
         yaml_stream.close()
 
+        # print(f"Saved state:\n{yaml.dump(self.state)}")
+
     def load_state(self):
         linked = ["progress", "tts"]
         yaml_stream = (self.dir / self.statestore).open("r", encoding="utf-8")
@@ -269,20 +287,21 @@ class AudiobookProject:
         epub_path = self.dir / self.epub
         self.book = Book(epub_path)
         state_overrides = {
-            k: self.state[k] for k in ["title", "author", "series"] if self.state[k]
+            k: v
+            for k in ["title", "author", "series"]
+            if (v := self.state.get(k, None))
         }
-        self.book.meta._overrides |= state_overrides
+        self.book.meta.add_overrides(state_overrides)
 
-        (self.dir / self.fulltext).write_text(self.book.fulltext)
+        (self.dir / self.fulltext).write_text(self.book.fulltext, encoding="utf-8")
         self.set_state_book_metadata(
             {
                 "title": self.book.meta.title,
-                "author": self.book.meta.creator,
+                "author": self.book.meta.author,
                 "series": self.book.meta.series,
             }
         )
-
-        self.save_state()
+        print(self.book.meta.author)
 
     @property
     def epub(self) -> str:
@@ -308,9 +327,11 @@ class AudiobookProject:
                 warnings.warn("There seem to be multiple EPUBs.")
             return epubs[0].name
 
-    def set_state_book_metadata(self, mapping: dict[str, str | None]):
-        valid_keys = ["title", "author", "series"]
-        self.state.update(self.valid_dict(mapping, whitelist=valid_keys))
+    def set_state_book_metadata(self, mapping: Optional[dict[str, str | None]] = None):
+        if mapping is not None:
+            valid_keys = ["title", "author", "series"]
+            new_vals = self.valid_dict(mapping, whitelist=valid_keys)
+            self.state.update(new_vals)
 
     def get_state_book_metdata(self):
         valid_keys = ["title", "author", "series"]
@@ -330,13 +351,21 @@ class AudiobookProject:
 
     def init_lexicon(
         self,
-        g2g_paths: list[str] = [],
-        g2p_paths: list[str] = [],
+        g2g_paths: Optional[List[str]] = None,
+        g2p_paths: Optional[List[str]] = None,
     ):
-        g2g_paths.extend(self.lexicon_sources.get("g2g", []))
-        g2p_paths.extend(self.lexicon_sources.get("g2p", []))
+        g2g_full_paths = []
+        g2p_full_paths = []
+
+        g2g_full_paths.extend(g2g_paths or [])
+        g2p_full_paths.extend(g2p_paths or [])
+
+        g2g_full_paths.extend(self.lexicon_sources.get("g2g", []))
+        g2p_full_paths.extend(self.lexicon_sources.get("g2p", []))
+
         # Instantiate Lexicon
-        self.lexicon = Lexicon(g2g_paths, g2p_paths)
+        self.lexicon = Lexicon(g2g_full_paths, g2p_full_paths)
+        # TODO: Consider moving this to save_state
         self.set_state_lexicon_sources(
             self.lexicon.g2g_paths, self.lexicon.g2p_paths, append=False
         )
@@ -366,3 +395,6 @@ class AudiobookProject:
             "g2p": g2p,
         }
         self.state["lexicon"] |= self.valid_dict(newstate)
+
+
+# %%

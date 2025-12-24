@@ -20,7 +20,7 @@ dependencies = [
     "pyyaml>=6.0.3",
     "wordfreq>=3.1.1",
     "dpath>=2.2.0",
-    "lxml-stubs>=0.5.1",
+    "types-lxml>=2025.11.25",
 ]
 
 [project.optional-dependencies]

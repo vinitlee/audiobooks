@@ -1,71 +1,107 @@
 from __future__ import annotations
 from typing import TYPE_CHECKING, cast, overload
 
+from typing import Any, Callable, Iterable, Optional, Set, Union, List, Dict, Union
+
 if TYPE_CHECKING:
     from kokoro import KPipeline, KModel
-    from typing import Any, Callable, Iterable, Optional
-    from pathlib import Path
 
 import yaml
 
+import argparse
+import glob
+
+from processor import AudiobookProject
+
+from pathlib import Path
+
 
 def main(
-    files: set[Path | str],
+    paths: Set[str],
     voice: str = "am_michael",
     speed: float = 1,
-    lexicon: Path | str | None = None,
+    lexicon_g2g: List[str] | None = None,
+    lexicon_g2p: List[str] | None = None,
+    metadata_overrides=None,
+    output: str | None = None,
     init_only=False,
-    output: Path | str | None = None,
-    overwrite_project=False,
-    overwrite_tts=False,
-    overwrite_master=False,
-    overwrite_m4b=False,
-    overwrite_output=False,
     clean=False,
 ):
 
-    # print(files)
-    print(output)
+    for path in paths:
+        params = clean_dict(
+            {
+                "init_path": path,
+                "tts_voice": voice,
+                "tts_speed": speed,
+                "lex_g2g_paths": lexicon_g2g,
+                "lex_g2p_paths": lexicon_g2p,
+                "override_metadata": metadata_overrides,
+            }
+        )
+        proj = AudiobookProject(**params)
 
-    for p in files:
-        my_proj = TTSProject(p, lexicon=lexicon, voice=voice, speed=speed)
-        my_proj.save_book_text()
-        # TODO: There are probably too many overwrite flags, figure out if you want overwrite_project or just sections
-        if (not my_proj.completed) or overwrite_project:
-            if not init_only:
-                my_proj.generate_sound_files(overwrite=overwrite_tts)
-                my_proj.create_ffmetadata()
-                my_proj.build_master_audio(overwrite=overwrite_master)
-                my_proj.build_m4b(overwrite=overwrite_m4b)
-        else:
-            print(f"Not processing {p}, already completed.")
-        if output and my_proj.completed:
-            my_proj.copy_to_library(output, overwrite=overwrite_output, epub=True)
-            if clean:
-                print("Clean not implemented.")
+        if init_only:
+            continue
+
+        proj.make_splits()
+        proj.make_master()
+        proj.make_m4b()
+        proj.copy_to_library()
 
 
-def load_config(config_path, valid_args):
+def not_none_dict(d: dict):
+    return {k: v for k, v in d.items() if v is not None}
+
+
+def clean_dict(d: dict):
+    return {k: v for k, v in d.items() if v}
+
+
+def ensure_list(e):
+    if not isinstance(e, list):
+        return [e]
+    return e
+
+
+def parse_config(config_path):
     config = yaml.safe_load(Path(config_path).open())
-    valid_config = {k: v for k, v in config.items() if (k in valid_args)}
+    config_name = config.get("name")
+    config_metadata = clean_dict(
+        {
+            "author": config.get("author"),
+            "series": config.get("series"),
+        }
+    )
+    config_args = clean_dict(
+        {
+            "paths": config.get("paths") or config.get("files"),
+            "voice": config.get("voice"),
+            "speed": float(config.get("speed")),
+            "lexicon_g2g": ensure_list(config.get("g2g")),
+            "lexicon_g2p": ensure_list(config.get("g2p") or config.get("lexicon")),
+            "metadata_overrides": config_metadata,
+            "output": config.get("output"),
+        }
+    )
 
-    return valid_config
+    return config_args
 
 
 def parse_arguments() -> dict:
-    set_args = {}
     parser = argparse.ArgumentParser()
+
     parser.add_argument(
-        "files",
+        "paths",
         metavar="PATH",
         nargs="*",
-        help="Path(s) to *.epub or dir to be processed; accepts * as a wildcard",
+        help="Path(s) to *.epub or dir to be processed; accepts globs",
     )
     parser.add_argument(
         "--voice",
         "-v",
         type=str,
-        help="Kokoro voice",
+        help="Kokoro TTS voice",
         choices=[
             "af_bella",
             "af_nicole",
@@ -83,43 +119,25 @@ def parse_arguments() -> dict:
         "--speed",
         "-s",
         type=float,
-        help="TTS Speed",
+        help="Kokoro TTS Speed",
     )
     parser.add_argument(
-        "--lexicon",
-        "-lx",
+        "--g2g",
+        "-lg",
         type=str,
-        help="Path to external lexicon file",
+        help="Path to external G2G lexicon YAML file",
     )
     parser.add_argument(
-        "--init_only",
+        "--g2p",
+        "-lp",
+        type=str,
+        help="Path to external G2P lexicon YAML file",
+    )
+    parser.add_argument(
+        "--init-only",
         "-ino",
         action="store_true",
         help="Just set up project, don't generate",
-    )
-    parser.add_argument(
-        "--overwrite_project",
-        "-owp",
-        action="store_true",
-        help="Allow overwriting project",
-    )
-    parser.add_argument(
-        "--overwrite_tts",
-        "-owt",
-        action="store_true",
-        help="Allow overwriting TTS",
-    )
-    parser.add_argument(
-        "--overwrite_master",
-        "-owm",
-        action="store_true",
-        help="Allow overwriting concatenated audio master",
-    )
-    parser.add_argument(
-        "--overwrite_m4b",
-        "-owb",
-        action="store_true",
-        help="Allow overwriting M4B",
     )
     parser.add_argument(
         "--clean",
@@ -134,6 +152,21 @@ def parse_arguments() -> dict:
         help="Directory to copy final M4B when done",
     )
     parser.add_argument(
+        "--title",
+        type=str,
+        help="Override title for all files",
+    )
+    parser.add_argument(
+        "--author",
+        type=str,
+        help="Override author for all files",
+    )
+    parser.add_argument(
+        "--series",
+        type=str,
+        help="Override series for all files",
+    )
+    parser.add_argument(
         "--config",
         "-c",
         metavar="PATH",
@@ -142,24 +175,54 @@ def parse_arguments() -> dict:
     args = parser.parse_args()
 
     set_args = {}
+
     if args.config:
-        set_args.update(load_config(args.config, vars(args).keys()))
-    set_args.update(
+        set_args = parse_config(args.config)
+    cmd_args = clean_dict(
         {
-            k: v
-            for k, v in vars(args).items()
-            if (bool(v) and (v is not None) and (v is not False))
+            "paths": args.paths,
+            "voice": args.voice,
+            "speed": args.speed,
+            "lexicon_g2g": args.g2g,
+            "lexicon_g2p": args.g2p,
+            "output": args.output,
         }
     )
-    del set_args["config"]
+    cmd_metadata_overrides = clean_dict(
+        {
+            "title": args.title,
+            "author": args.author,
+            "series": args.series,
+        }
+    )
+    cmd_only_args = clean_dict(
+        {
+            "clean": args.clean,
+            "init_only": args.init_only,
+        }
+    )
 
-    # print(set_args)
+    print(set_args)
+    print(cmd_args)
+    print(cmd_metadata_overrides)
+    print(cmd_only_args)
+
+    set_args.update(cmd_args)
+    if not isinstance(set_args.get("metadata_overrides"), dict):
+        set_args["metadata_overrides"] = {}
+    set_args["metadata_overrides"].update(cmd_metadata_overrides)
+    set_args.update(cmd_only_args)
+
+    if set_args.get("speed"):
+        set_args["speed"]
+
     expanded_paths = set()
-    for p in set_args["files"]:
+    for p in set_args["paths"]:
+        p = str(Path(p).expanduser().resolve())
         expanded_paths = expanded_paths.union(glob.glob(p))
-    set_args["files"] = expanded_paths
-    # print(set_args)
+    set_args["paths"] = sorted(list(expanded_paths))
 
+    print(f"\n------ args ------\n{set_args}\n------------------\n")
     return set_args
 
 

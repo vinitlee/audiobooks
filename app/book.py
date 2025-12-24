@@ -9,8 +9,8 @@ import glob
 import re
 import warnings
 
-import json
-import yaml
+# import json
+# import yaml
 
 import numpy as np
 import cv2
@@ -125,17 +125,37 @@ class BookMetadata:
 
     @property
     def author(self):
-        return self.creator
+        return self.get_tag("author") or self.creator
 
-    def __getattr__(self, name):
-        # Handles general cases
-        if name in self._overrides:
-            return self._overrides.get(name)
-        entry = self.get("DC", name)
+    def get_tag(self, tag_name):
+        if tag_name in self._overrides:
+            return self._overrides.get(tag_name)
+        entry = self.get("DC", tag_name)
         if entry and len(entry):
             vals, ids = zip(*entry)
             return self._delim.join(vals)
         return ""
+
+    def __getattr__(self, name):
+        # Handles general cases
+        return self.get_tag(name)
+
+    def add_overrides(self, new_overrides: Dict[str, Any]):
+        self._overrides.update(new_overrides)
+
+
+class ElementBlock:
+    element: lxml.html.HtmlElement
+    tag: str
+    text: str
+
+    def __init__(self, element: lxml.html.HtmlElement):
+        self.element = element
+        self.tag = str(element.tag)
+        self.text = element.text_content()
+
+    def sanitize(self):
+        self.text
 
 
 class Chapter:
@@ -157,6 +177,7 @@ class Chapter:
     def append(self, text, tagname="p"):
         new_el = lxml.html.Element(tagname)
         new_el.text = text
+        new_el.tag
         self._doc.body.append(new_el)
 
     def insert(self, pos, text, tagname="p"):
@@ -177,7 +198,7 @@ class Chapter:
         self, match_tags: list[str] = ["p", "h1", "h2", "h3"], strip_empty=False
     ):
         return [
-            tag
+            ElementBlock(tag)
             for tag in self._doc.iter(tag=match_tags)
             if tag.text_content() or not strip_empty
         ]

@@ -1,0 +1,17 @@
+name: Tester of a Tester
+author: Authy Author, Authen
+series: Serial Zero
+
+# Files
+files:
+  - C:\Users\vinitlee\Desktop\Asc*
+output: C:\Users\vinitlee\Downloads\
+
+# TTS
+voice: am_michael
+speed: 1.2
+g2g:
+  - G:\Projects\audiobooks\lexicons\g2g\exclamations.yaml
+  - G:\Projects\audiobooks\lexicons\g2g\AoaB.yaml
+g2p:
+  - G:\Projects\audiobooks\lexicons\g2p\AoaB.yaml

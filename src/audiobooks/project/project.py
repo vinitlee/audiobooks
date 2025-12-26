@@ -40,6 +40,7 @@ import datetime
 import dpath.util
 
 from dataclasses import dataclass, field
+from enum import Enum
 
 # from functools import lru_cache
 
@@ -63,86 +64,227 @@ import traceback
 import logging
 
 # Project Libraries
-from book import Book
-from tts import Lexicon, TTSProcessor, KPipelineLazy
-from audio import AudioChapter, AudioProcessor
-from utils import not_none_dict, clean_dict, ensure_list
+from audiobooks.core.book import Book
+from audiobooks.tts.tts import Lexicon, TTSProcessor, KPipelineLazy, Voice
+from audiobooks.core.audio import AudioChapter, AudioProcessor
+from audiobooks.utils.utils import not_none_dict, clean_dict, ensure_list, filter_dict
+
+
+# %%
+class Result(Enum):
+    NEW_PROJECT = 1
+    NEW_FROM_EXISTING_DIR = 5
+    RESUMED = 2
+    RESET_FROM_CORRUPTION = 3
+    FAILED_INVALID_PATH = 4
+    FAILED_MULTIPLE_EPUBS = 6
+
 
 # %%
 
 
-class ProjectProgress:
-    def __init__(self, steps: list[str]):
-        self.progress = dict.fromkeys(steps, False)
+@dataclass
+class ProjectConfig:
+    init_path: str
+    tts_voice: Optional[Voice] = None
+    tts_speed: Optional[float] = None
+    lex_g2g_paths: Optional[List[str]] = None
+    lex_g2p_paths: Optional[List[str]] = None
+    override_author: Optional[str] = None
+    override_series: Optional[str] = None
+    output_path: Optional[str] = None
+
+
+@dataclass
+class TtsConfig:
+    voice: Optional[Voice] = None
+    speed: Optional[float] = None
+
+
+@dataclass
+class LexiconConfig:
+    # XXX: Consider making everything a Path
+    g2g: list[str] = field(default_factory=list)
+    g2p: list[str] = field(default_factory=list)
+
+
+@dataclass
+class ProjectSpec:
+    project_dir: Path
+    epub_path: Optional[Path] = None
+
+    tts_voice: Optional[Voice] = None
+    tts_speed: Optional[float] = None
+    lex_g2g_paths: Optional[list[str]] = None
+    lex_g2p_paths: Optional[list[str]] = None
+    override_author: Optional[str] = None
+    override_series: Optional[str] = None
+    output_path: Optional[str] = None
 
     @classmethod
-    def from_dict(cls, d: dict):
-        obj = cls([])
-        obj.progress = {k: bool(v) for k, v in d.items()}
-        return obj
+    def from_yaml(cls, yaml_path: Union[Path, str]):
+        yaml_path = Path(yaml_path)
+        d = yaml.safe_load(yaml_path.open(encoding="utf-8"))
 
-    def to_dict(self):
-        return self.progress
+        return cls(
+            project_dir=yaml_path.parent,
+            epub_path=d.get("epub"),
+            tts_voice=d.get("voice"),
+            tts_speed=d.get("speed"),
+            lex_g2g_paths=d.get("g2g"),
+            lex_g2p_paths=d.get("g2p"),
+            override_author=d.get("author"),
+            override_series=d.get("series"),
+            output_path=d.get("output_path"),
+        )
+
+    @classmethod
+    def resolve(
+        cls,
+        patch: Optional[ProjectSpec],
+        snapshot: Optional[ProjectSpec],
+        result: Result,
+    ) -> ProjectSpec:
+        if patch is None and snapshot is None:
+            return cls()
+        return cls()
+
+    @property
+    def params(self):
+        return {}
+
+
+@dataclass
+class ProjectState:
+    splits: list[AudioChapter]
+    files: set[str]
 
 
 class AudiobookProject:
+    project_dir: Path
+    _open_result: str
+
     book: Book
+    voice: Voice
     lexicon: Lexicon
-    # Generation
+
     processor: TTSProcessor
 
+    chapters: Optional[List[AudioChapter]] = None
+
     # Paths
-    statestore: str = "project.yaml"
+    state_file: str = "project.yaml"
     fulltext: str = "fulltext.txt"
     cover: str = "cover.jpg"
     wavfiles: str = "files"
     ffmeta: str = "ffmetadata"
 
-    complete: Dict[str, bool]
-    state: Dict[str, Any]
+    def __init__(self, spec: ProjectSpec) -> None:
+        self.project_dir = spec.project_dir
+        self.book = Book(epub_path)
+        self.voice = tts_voice if tts_voice is not None else "am_michael"
+        self.speed = tts_speed if tts_speed is not None else 1.0
+        self.lexicon = Lexicon(lex_g2g_paths, lex_g2p_paths)
+        self.book.meta.override_author = override_author
+        self.book.meta.override_series = override_series
+        self.output_path = output_path
 
-    chapters: Optional[List[AudioChapter]] = None
-
-    def __init__(
-        self,
+    @classmethod
+    def open(
+        cls,
         init_path: Path | str,
-        tts_voice: Optional[str] = None,
-        tts_speed: Optional[float] = None,
-        lex_g2g_paths: Optional[List[str]] = None,
-        lex_g2p_paths: Optional[List[str]] = None,
-        override_metadata: Optional[Dict[str, Any]] = None,
-        output_path: Optional[Path | str] = None,
-    ) -> None:
-        logging.debug(f"Initializing project from {init_path}")
+        config: ProjectConfig,
+    ):
 
-        self.init_vars()
+        logging.info(f"Opening from {init_path}")
 
-        # Load an old project or make dir for new project
-        self.init_dir(init_path)
+        open_result = None
 
-        # Make Book
-        self.set_state_book_metadata(override_metadata)
-        self.init_book()
+        snapshot: Optional[ProjectSpec] = None
+        restore_state: ProjectState
 
-        # Make Lexicon
-        self.init_lexicon(lex_g2g_paths, lex_g2p_paths)
+        init_path = Path(init_path)
+        if init_path.is_dir() and (epubs := list(init_path.glob("*.epub"))):
+            # Is a potential project dir with an EPUB inside
+            if (state_file := (init_path / cls.state_file)).exists():
+                # project.yaml file exists
+                try:
+                    snapshot = ProjectSpec.from_yaml(state_file)
+                    # runtime_state = AudiobookProjectState()
+                    open_result = Result.RESUMED
+                except Exception as e:
+                    logging.error(e)
+                    # Could not load from project.yaml, ignore state and start fresh
+                    if len(epubs) == 1:
+                        snapshot = ProjectSpec(
+                            project_dir=init_path,
+                            epub_path=epubs[0],
+                        )
+                        open_result = Result.RESET_FROM_CORRUPTION
+                    else:
+                        open_result = Result.FAILED_MULTIPLE_EPUBS
+            else:
+                snapshot = ProjectSpec(
+                    project_dir=init_path,
+                    epub_path=epubs[0],
+                )
+                open_result = Result.NEW_FROM_EXISTING_DIR
+        elif init_path.is_file() and init_path.suffix == ".epub":
+            # Is an EPUB
+            try:
+                project_dir, epub_path = cls.new_project_dir(init_path)
+                snapshot = ProjectSpec(project_dir=project_dir, epub_path=epub_path)
+                open_result = Result.NEW_PROJECT
+            except Exception as e:
+                logging.error(e)
 
-        # Store TTS parameters
-        self.set_state_tts(tts_voice, tts_speed)
+        if open_result is None:
+            # Does not look compatible
+            open_result = Result.FAILED_INVALID_PATH
+            logging.exception(f"{init_path} is not a valid starting path.")
+            raise
 
-        # Mark init completed and save progress
-        self.complete["init"] = True
-        self.save_state()
+        # effective = AudiobookProjectSpec.resolve(
+        #     patch=patch, snapshot=snapshot, result=open_result
+        # )
+
+        obj = cls(**effective.params)
+        # if open_result == Result.RESUMED:
+        #     obj.rehydrate(runtime_state)
+
+        return obj
+
+    def rehydrate(self, state: ProjectState):
+        pass
+
+    @staticmethod
+    def new_project_dir(epub_path: Path) -> tuple[Path, Path]:
+        if not (epub_path.suffix == ".epub" and epub_path.exists()):
+            logging.exception(f"{epub_path} is invalid.")
+            raise
+
+        # Make dir
+        newdir = epub_path.parent / epub_path.stem
+        newdir = newdir.expanduser().resolve()
+        if newdir.exists():
+            logging.exception(f"{newdir} already exists.")
+            raise
+        newdir.mkdir(parents=True, exist_ok=False)
+
+        # Move epub into it
+        new_epub_path = newdir / epub_path.name
+        epub_path.rename(new_epub_path)
+
+        return newdir, new_epub_path
 
     def init_dir(self, init_path):
-        print("\n### Initializing Project ###")
+        logging.info("Initializing Project")
         init_path = Path(init_path)
 
         if init_path.is_dir():
-            # If DIR
             set_up = False
             self.dir = init_path
-            if (self.dir / self.statestore).exists():
+            if (self.dir / self.state_file).exists():
                 try:
                     # If there is a project.yaml
                     self.load_state()
@@ -222,53 +364,6 @@ class AudiobookProject:
 
     # ------------------------------------------------------------------------
 
-    def init_vars(self):
-        self.complete = {
-            "init": False,
-            "splits": False,
-            "join": False,
-            "m4b": False,
-            "copy": False,
-        }
-
-        self.state = {
-            "title": None,
-            "author": None,
-            "series": None,
-            "progress": self.complete,
-            "book": {"epub": None},
-            "tts": {
-                "voice": "am_michael",
-                "speed": 1.0,
-            },
-            "lexicon": {
-                "g2g": [],
-                "g2p": [],
-            },
-            "output": None,
-            "saved": None,
-        }
-
-        self.override_metadata = {}
-
-    @staticmethod
-    def valid_dict(
-        d: dict,
-        whitelist: Optional[list[Any]] = None,
-        blacklist: Optional[list[Any]] = None,
-    ):
-        def is_valid(k, v):
-            non_null = v is not None
-            white = True
-            if whitelist is not None:
-                white = k in whitelist
-            black = True
-            if blacklist is not None:
-                black = k not in blacklist
-            return non_null and white and black
-
-        return {k: v for k, v in d.items() if is_valid(k, v)}
-
     # -- State --
 
     def restore_from_dict(self, d: dict):
@@ -303,7 +398,7 @@ class AudiobookProject:
 
     def save_state(self):
         self.set_state("saved", datetime.datetime.now())
-        yaml_stream = (self.dir / self.statestore).open("w", encoding="utf-8")
+        yaml_stream = (self.dir / self.state_file).open("w", encoding="utf-8")
         yaml.dump(self.state, yaml_stream, allow_unicode=True, sort_keys=False)
         yaml_stream.close()
 
@@ -311,15 +406,13 @@ class AudiobookProject:
 
     def load_state(self):
         linked = ["progress", "tts"]
-        yaml_stream = (self.dir / self.statestore).open("r", encoding="utf-8")
+        yaml_stream = (self.dir / self.state_file).open("r", encoding="utf-8")
 
         loaded = yaml.load(yaml_stream, yaml.FullLoader)
-        self.state |= self.valid_dict(loaded, blacklist=linked)
+        self.state |= filter_dict(loaded, blacklist=linked)
         # Assign linked entries
         self.complete |= loaded.get("progress", {})
-        self.set_state_tts(
-            **self.valid_dict(loaded["tts"], whitelist=["voice", "speed"])
-        )
+        self.set_state_tts(**filter_dict(loaded["tts"], whitelist=["voice", "speed"]))
 
     # -- Book --
 
@@ -363,13 +456,13 @@ class AudiobookProject:
         # If there is an EPUB in the directory
         if len(epubs):
             if len(epubs) > 1:
-                warnings.warn("There seem to be multiple EPUBs.")
+                logging.warning("There seem to be multiple EPUBs.")
             return epubs[0].name
 
     def set_state_book_metadata(self, mapping: Optional[dict[str, str | None]] = None):
         if mapping is not None:
             valid_keys = ["title", "author", "series"]
-            new_vals = self.valid_dict(mapping, whitelist=valid_keys)
+            new_vals = filter_dict(mapping, whitelist=valid_keys)
             self.state.update(new_vals)
 
     def get_state_book_metdata(self):
@@ -383,7 +476,7 @@ class AudiobookProject:
         return self.state.get("tts", {})
 
     def set_state_tts(self, voice: Optional[str] = None, speed: Optional[float] = None):
-        newstate = self.valid_dict({"voice": voice, "speed": speed})
+        newstate = filter_dict({"voice": voice, "speed": speed})
         self.state["tts"] = self.tts_params | newstate
 
     # -- Lexicon --
@@ -433,7 +526,4 @@ class AudiobookProject:
             "g2g": g2g,
             "g2p": g2p,
         }
-        self.state["lexicon"] |= self.valid_dict(newstate)
-
-
-# %%
+        self.state["lexicon"] |= filter_dict(newstate)

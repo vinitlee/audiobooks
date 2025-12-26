@@ -1,35 +1,9 @@
-from __future__ import annotations
-from typing import TYPE_CHECKING, cast, overload
-
-from typing import (
-    Any,
-    Callable,
-    Iterable,
-    Optional,
-    Tuple,
-    List,
-    Dict,
-    Union,
-    Sequence,
-    Pattern,
-)
-
-if TYPE_CHECKING:
-    from kokoro import KPipeline, KModel
-    from misaki.en import G2P, MToken
-
-import warnings
-from pathlib import Path
-
-import yaml
+from typing import List, Dict, Optional, Pattern
+import logging
 import re
 
-# from torch.cuda import is_available as is_cuda_available
-from functools import lru_cache
-
-from dataclasses import dataclass
-
-# %%
+import yaml
+from pathlib import Path
 
 
 class SubRule:
@@ -113,7 +87,7 @@ class Lexicon:
                 if loaded_map and isinstance(loaded_map, dict):
                     mapping |= loaded_map
                 else:
-                    warnings.warn(f"{p} contains non-mapping data.")
+                    logging.warning(f"{p} contains non-mapping data.")
         return {str(k): "" if v is None else str(v) for k, v in mapping.items()}
 
     def g2g_from_src(self, paths: list[str]):
@@ -129,7 +103,7 @@ class Lexicon:
                     pat, rep = list(y.items())[0]
                     # Strict enforcement
                     if not (isinstance(pat, str) and isinstance(rep, str)):
-                        warnings.warn(
+                        logging.warning(
                             f"G2G Lexicons must be str:str. Issue in {p} @ {ln}"
                         )
                         continue
@@ -140,7 +114,7 @@ class Lexicon:
                     # rep = str(rep)
                     self.g2g_rules.append(SubRule(pat, rep))
                 else:
-                    warnings.warn(f"Found non-mapping data. Skipping {p}")
+                    logging.warning(f"Found non-mapping data. Skipping {p}")
 
     def g2p_from_yaml(self, paths: list[str]):
         mapping = self.map_from_yaml(paths)
@@ -164,103 +138,3 @@ class Lexicon:
             "g2g": self.g2g_paths,
             "g2p": self.g2p_paths,
         }
-
-
-class KPipelineLazy:
-    g2p: Callable[[str], Tuple[str, List[MToken]]]
-
-    def __init__(self, *args, **kwargs):
-        self.args = args
-        self.kwargs = kwargs
-        self._obj = None
-
-    def load(self):
-        if self._obj is None:
-            from kokoro import KPipeline
-
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore", UserWarning)
-                warnings.simplefilter("ignore", FutureWarning)
-                self._obj = KPipeline(*self.args, **self.kwargs)
-        return self._obj
-
-    @classmethod
-    @lru_cache(maxsize=1)
-    def instance(cls, *args, **kwargs) -> KPipelineLazy:
-        return cls(*args, **kwargs)
-
-    def __getattr__(self, name: str):
-        return getattr(self.load(), name)
-
-    def __call__(self, *args, **kwargs):
-        return self.load()(*args, **kwargs)
-
-
-class TTSProcessor:
-    pipeline: KPipelineLazy
-    lexicon: Lexicon
-    _unknown_words: dict[str, str] = {}
-
-    def __init__(
-        self,
-        lexicon: Lexicon,
-        pipeline_args: dict = {},
-    ) -> None:
-        self._unknown_words = {}
-        self.init_pipeline(pipeline_args)
-
-    def init_pipeline(self, pipeline_args):
-        defaults = {
-            "lang_code": "a",
-            "device": "cuda",
-            "repo_id": "hexgrad/Kokoro-82M",
-        }
-        # if not is_cuda_available():
-        #     defaults["device"] = "cpu"
-
-        self.pipeline = KPipelineLazy.instance(**(defaults | pipeline_args))
-
-    def get_unknown_words(self):
-        """
-        Use to generate an unknown words document
-        """
-        return self._unknown_words
-
-    def replacement_g2p(
-        self, stock_g2p: Callable[[str], Tuple[str, List[MToken]]]
-    ) -> Callable[[str], Tuple[str, List[MToken]]]:
-        from misaki import en, espeak
-
-        espeak_fallback = espeak.EspeakFallback(british=False)
-
-        def logging_fallback(t: MToken):
-
-            espeak_token = espeak_fallback(t)
-
-            text_lower = t.text.strip().lower()
-            if not self.lexicon.in_g2p(t.text):
-                if not text_lower in self._unknown_words:
-                    self._unknown_words[text_lower] = espeak_token[0] or ""
-
-            return espeak_token
-
-        logging_g2p = en.G2P(trf=False, british=False, fallback=logging_fallback)
-
-        def replacement_fn(text: str) -> Tuple[str, List[MToken]]:
-            text = self.lexicon.g2g(text)
-            # TODO: make sure this is in the right place.
-            # I am not sure what text looks like here, but it might be too small.
-            # Try to run g2g on full chapter text.
-
-            gs, tokens = logging_g2p(text)
-
-            for t in tokens:
-                gr = t.text
-                ph = t.phonemes
-
-                if self.lexicon.in_g2p(gr):
-                    t.text = self.lexicon.g2p(gr, ph or "")
-
-            return gs, tokens
-
-        return replacement_fn

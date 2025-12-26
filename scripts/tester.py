@@ -1,11 +1,16 @@
 # %%
 
-from book import Book
-from processor import AudiobookProject, Lexicon
+from audiobooks import Book
+from IPython.display import display
 
-epub_path = r"../books/Ascendance of a Bookworm - Volume 02 [J-Novel Club][Premium]/Ascendance of a Bookworm - Volume 02 [J-Novel Club][Premium].epub"
+# from audiobook.book import Book
+# from processor import AudiobookProject, Lexicon
+
+epub_path = r"test_data\src\childrens-literature.epub"
 
 my_book = Book(epub_path)
+# my_book.meta.add_overrides(title="Boop")
+display(my_book.meta)
 # print("Tester")
 # my_lexicon = Lexicon(
 #     g2g_paths=[

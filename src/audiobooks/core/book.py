@@ -1,8 +1,9 @@
 from __future__ import annotations
 from typing import TYPE_CHECKING, cast
 
-if TYPE_CHECKING:
-    from typing import Any, Callable, Optional, Dict
+# if TYPE_CHECKING:
+
+from typing import Any, Callable, Optional, Dict, Literal, Sequence
 
 from pathlib import Path
 import glob
@@ -21,7 +22,7 @@ from ebooklib import epub
 import ebooklib
 import lxml.html
 
-from utils import flatten_deep
+from audiobooks.utils.utils import flatten_deep
 
 
 class Book:
@@ -100,17 +101,19 @@ class Book:
 
 
 class BookMetadata:
-    get: Callable[[str, str], Any]
+    epub_obj: epub.EpubBook
+    epub_dc: dict
     cover: np.ndarray
-    overrides: Dict[str, Any]
+    overrides: Dict[str, str]
     _delim: str = ", "
-    _tags: set
+    _tags: list
+
+    MetadataSource = Literal["override", "custom", "epub", "epub_meta", "fallback"]
 
     def __init__(self, epub_obj: epub.EpubBook):
-        self.get = epub_obj.get_metadata
-
         # Esential attributes
-        self.title = epub_obj.title
+        self.epub_obj = epub_obj
+        self.epub_dc = epub_obj.metadata[epub.NAMESPACES["DC"]]
         self.overrides = {}
 
         # Cover
@@ -127,39 +130,69 @@ class BookMetadata:
             warnings.warn("Could not get cover image.")
 
         # Inferred tags
-        self._tags = set()
-        for namespace, items in epub_obj.metadata.items():
-            for name in items:
-                self._tags.add(name)
+        self._tags = list(self.epub_dc.keys())
+
+    def get_from_epub_meta(self, name: str):
+        entry = self.epub_dc.get(name)
+        if entry is None:
+            return None
+        values, ids = list(zip(*entry))
+        ids = [v.get("id") for v in ids]
+        return self.join_vals(values, self._delim)
+
+    @staticmethod
+    def join_vals(vals: Sequence, delimiter: str):
+        if len(vals) == 0:
+            return None
+        elif len(vals) == 1:
+            return vals[0]
+
+        return delimiter.join(vals)
+
+    def in_epub(self, name: str):
+        return name in self.epub_dc
 
     # One-off cases here
     @property
     def year(self):
-        # Try to pull from rights
-        m = re.search(r"[0-9]{4}", str(self.rights))
-        if m:
-            return m.group(0)
-        return ""
+        if self.source("year") in ["fallback"]:
+            rights_str = str(self.get_tag("rights"))
+            m = re.search(r"[0-9]{4}", rights_str)
+            if m:
+                return m.group(0)
+            return ""
+        else:
+            return self.get_tag("")
 
-    @property
-    def author(self):
-        return self.get_tag("author") or self.creator
+    def get_tag(self, name):
+        match self.source(name):
+            case "override":
+                return self.overrides[name]
+            case "epub":
+                return getattr(self.epub_obj, name)
+            case "epub_meta":
+                return self.get_from_epub_meta(name)
+            case "fallback":
+                return ""
 
-    def get_tag(self, tag_name):
-        if tag_name in self.overrides:
-            return self.overrides.get(tag_name)
-        entry = self.get("DC", tag_name)
-        if entry and len(entry):
-            vals, ids = zip(*entry)
-            return self._delim.join(vals)
-        return ""
+    def source(self, name: str) -> MetadataSource:
+        if name in self.overrides:
+            return "override"
+        elif name in ["title", "language"]:
+            return "epub"
+        elif self.in_epub(name):
+            return "epub_meta"
+        return "fallback"
 
-    def __getattr__(self, name):
+    def __getattr__(self, name: str):
         # Handles general cases
         return self.get_tag(name)
 
-    def add_overrides(self, new_overrides: Dict[str, Any]):
-        self.overrides.update(new_overrides)
+    def add_overrides(self, **kwargs):
+        self.overrides.update(kwargs)
+
+    def __repr__(self) -> str:
+        return f"{self.title}\n{self.overrides}"
 
 
 class ElementBlock:

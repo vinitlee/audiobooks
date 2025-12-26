@@ -57,14 +57,17 @@ class KPipelineLazy:
         return self.load()(*args, **kwargs)
 
 
-if torch.cuda.is_available():
-    PIPELINE = KPipelineLazy(lang_code="a", device="cuda", repo_id="hexgrad/Kokoro-82M")
-else:
-    PIPELINE = KPipelineLazy(lang_code="a", device="cpu", repo_id="hexgrad/Kokoro-82M")
+PIPELINE = KPipelineLazy(lang_code="a", device="cuda", repo_id="hexgrad/Kokoro-82M")
+# if torch.cuda.is_available():
+#     PIPELINE = KPipelineLazy(lang_code="a", device="cuda", repo_id="hexgrad/Kokoro-82M")
+# else:
+#     PIPELINE = KPipelineLazy(lang_code="a", device="cpu", repo_id="hexgrad/Kokoro-82M")
 
 
 class TTSProject:
-    lexicon_path: Path | str | None = None
+    epub_path: Path
+    lexicon: dict | None = None
+    lexicon_path: Path | None = None
 
     def __init__(
         self,
@@ -75,6 +78,9 @@ class TTSProject:
         speed: float = 1,
     ):
         self.project_dir_path: Path
+
+        if lexicon is not None:
+            self.lexicon_path = Path(lexicon)
 
         starting_path = Path(starting_path)
         if not starting_path.exists():
@@ -90,12 +96,6 @@ class TTSProject:
             self.pipeline = PIPELINE
         else:
             self.pipeline = pipeline
-
-        self.lexicon_path: Path | None = None
-        if lexicon is not None:
-            self.lexicon_path = Path(lexicon)
-        self.epub_path: Path
-        self.lexicon: dict
 
         self.data["voice"] = voice
 

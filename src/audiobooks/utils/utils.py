@@ -1,4 +1,4 @@
-from typing import Any, Iterable
+from typing import Any, Iterable, Optional
 
 
 def not_none_dict(d: dict):
@@ -19,6 +19,24 @@ def clean_dict(d: dict):
     :type d: dict
     """
     return {k: v for k, v in d.items() if v}
+
+
+def filter_dict(
+    d: dict,
+    whitelist: Optional[list[Any]] = None,
+    blacklist: Optional[list[Any]] = None,
+):
+    def is_valid(k, v):
+        non_null = v is not None
+        white = True
+        if whitelist is not None:
+            white = k in whitelist
+        black = True
+        if blacklist is not None:
+            black = k not in blacklist
+        return non_null and white and black
+
+    return {k: v for k, v in d.items() if is_valid(k, v)}
 
 
 def ensure_list(e: Any):

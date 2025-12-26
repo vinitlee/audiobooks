@@ -10,3 +10,4 @@ wheels/
 .venv
 
 books/
+test_data/current/

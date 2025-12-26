@@ -12,10 +12,9 @@ import argparse
 import glob
 import logging
 
-from project import AudiobookProject
-
 from pathlib import Path
-from utils import not_none_dict, clean_dict, ensure_list
+from audiobooks import AudiobookProject
+from audiobooks.utils import not_none_dict, clean_dict, ensure_list
 
 
 def main(

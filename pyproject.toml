@@ -16,11 +16,11 @@ dependencies = [
     "opencv-python>=4.11.0.86",
     "pathvalidate>=3.3.1",
     "subprocess-run>=0.0.8",
-    "line-profiler>=5.0.0",
     "pyyaml>=6.0.3",
     "wordfreq>=3.1.1",
     "dpath>=2.2.0",
     "types-lxml>=2025.11.25",
+    "pip>=25.3",
 ]
 
 [project.optional-dependencies]
@@ -55,3 +55,17 @@ torch = [
     { index = "pytorch-cpu", extra = "cpu" },
     { index = "pytorch-cu128", extra = "cu128" },
 ]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.2",
+    "line-profiler>=5.0.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.pytest.ini_options]
+pythonpath = "."
+testpaths = "tests"

@@ -13,42 +13,34 @@ import glob
 import logging
 
 from pathlib import Path
-from audiobooks import AudiobookProject
+from audiobooks import AudiobookProject, ProjectConfig, Voice
 from audiobooks.utils import not_none_dict, clean_dict, ensure_list
 
 
 def main(
-    paths: Set[str],
-    voice: str = "am_michael",
-    speed: float = 1,
-    lexicon_g2g: List[str] | None = None,
-    lexicon_g2p: List[str] | None = None,
-    metadata_overrides=None,
-    output: str | None = None,
+    paths: List[str],
+    voice: Voice = "am_michael",
+    speed: float = 1.0,
+    lexicon_g2g: Optional[List[str]] = None,
+    lexicon_g2p: Optional[List[str]] = None,
+    override_author: Optional[str] = None,
+    override_series: Optional[str] = None,
+    output: Optional[str] = None,
     init_only=False,
     clean=False,
 ):
+    config = ProjectConfig(
+        tts_voice=voice,
+        tts_speed=speed,
+        lex_g2g_paths=lexicon_g2g,
+        lex_g2p_paths=lexicon_g2p,
+        override_author=override_author,
+        override_series=override_series,
+        output_path=output,
+    )
 
     for path in paths:
-        params = clean_dict(
-            {
-                "init_path": path,
-                "tts_voice": voice,
-                "tts_speed": speed,
-                "lex_g2g_paths": lexicon_g2g,
-                "lex_g2p_paths": lexicon_g2p,
-                "override_metadata": metadata_overrides,
-            }
-        )
-        proj = AudiobookProject(**params)
-
-        if init_only:
-            continue
-
-        proj.make_splits()
-        proj.make_master()
-        proj.make_m4b()
-        proj.copy_to_library()
+        proj = AudiobookProject.open(path, config)
 
 
 def set_log_level(loglevel):

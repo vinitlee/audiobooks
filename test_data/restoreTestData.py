@@ -7,6 +7,6 @@ copy_src = pwd / "src"
 copy_dest = pwd / "current"
 
 if copy_dest.is_dir():
-    copy_dest.rmdir()
+    shutil.rmtree(str(copy_dest))
 
 shutil.copytree(copy_src, copy_dest)

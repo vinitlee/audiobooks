@@ -3,26 +3,31 @@
 from __future__ import annotations
 from typing import TYPE_CHECKING, cast, overload
 
+from typing import (
+    Any,
+    Callable,
+    Iterable,
+    Optional,
+    Tuple,
+    List,
+    Dict,
+    Union,
+    Sequence,
+    Self,
+    Mapping,
+    Literal,
+)
+
 if TYPE_CHECKING:
     from kokoro import KPipeline, KModel
     from misaki.en import G2P, MToken
-    from typing import (
-        Any,
-        Callable,
-        Iterable,
-        Optional,
-        Tuple,
-        List,
-        Dict,
-        Union,
-        Sequence,
-    )
 
 # Debugging
 from line_profiler import profile
 
 # Filesystem
 from pathlib import Path
+import shutil
 from pathvalidate import sanitize_filepath
 import glob
 
@@ -34,12 +39,13 @@ import glob
 # Text
 # import re
 import yaml
+import json
 import datetime
 
 # Objects
 import dpath.util
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, asdict
 from enum import Enum
 
 # from functools import lru_cache
@@ -67,7 +73,13 @@ import logging
 from audiobooks.core.book import Book
 from audiobooks.tts.tts import Lexicon, TTSProcessor, KPipelineLazy, Voice
 from audiobooks.core.audio import AudioChapter, AudioProcessor
-from audiobooks.utils.utils import not_none_dict, clean_dict, ensure_list, filter_dict
+from audiobooks.utils import (
+    not_none_dict,
+    clean_dict,
+    ensure_list,
+    filter_dict,
+    confirm,
+)
 
 
 # %%
@@ -84,18 +96,6 @@ class Result(Enum):
 
 
 @dataclass
-class ProjectConfig:
-    init_path: str
-    tts_voice: Optional[Voice] = None
-    tts_speed: Optional[float] = None
-    lex_g2g_paths: Optional[List[str]] = None
-    lex_g2p_paths: Optional[List[str]] = None
-    override_author: Optional[str] = None
-    override_series: Optional[str] = None
-    output_path: Optional[str] = None
-
-
-@dataclass
 class TtsConfig:
     voice: Optional[Voice] = None
     speed: Optional[float] = None
@@ -108,86 +108,247 @@ class LexiconConfig:
     g2p: list[str] = field(default_factory=list)
 
 
-@dataclass
-class ProjectSpec:
+@dataclass(frozen=True)
+class ProjectPaths:
     project_dir: Path
-    epub_path: Optional[Path] = None
 
-    tts_voice: Optional[Voice] = None
-    tts_speed: Optional[float] = None
+    config_name: str = "project.json"
+    state_name: str = "state.json"
+    master_audio_name: str = "master.m4a"
+    audiobook_name: str = "final.m4b"
+    chapter_record_name: str = "chapters.json"
+    text_name: str = "book.txt"
+    book_name: str = "book.epub"
+    cover_name: str = "cover.jpg"
+
+    source_dir_name: str = "source"
+    records_dir_name: str = "records"
+    artifacts_dir_name: str = "artifacts"
+    extras_dir_name: str = "extras"
+
+    chapters_dir_name: str = "chapter_wavs"
+    chapter_template: str = "chapter_{}.wav"
+
+    """
+    project_dir/
+        my_epub.epub
+        project.json
+        state.json
+        source/
+            book.epub
+        records/
+            ?
+        artifacts/
+            extras/
+                cover.jpg
+            chapter_wavs/
+                chapter_0.wav
+                ...
+            master.m4a
+            final.m4b
+    """
+
+    @property
+    def config(self) -> Path:
+        return self.project_dir / self.config_name
+
+    @property
+    def state(self) -> Path:
+        return self.project_dir / self.state_name
+
+    @property
+    def source_dir(self) -> Path:
+        return self.project_dir / self.source_dir_name
+
+    @property
+    def book(self) -> Path:
+        return self.source_dir / self.book_name
+
+    @property
+    def records_dir(self) -> Path:
+        return self.project_dir / self.records_dir_name
+
+    @property
+    def chapter_record(self) -> Path:
+        return self.records_dir / self.chapter_record_name
+
+    @property
+    def artifacts_dir(self) -> Path:
+        return self.project_dir / self.artifacts_dir_name
+
+    @property
+    def extras_dir(self) -> Path:
+        return self.artifacts_dir / self.extras_dir_name
+
+    @property
+    def cover_img(self) -> Path:
+        return self.extras_dir / self.cover_name
+
+    @property
+    def chapters_dir(self) -> Path:
+        return self.artifacts_dir / self.chapters_dir_name
+
+    def chapter(self, chapter_number: int) -> Path:
+        return self.chapters_dir / self.chapter_template.format(chapter_number)
+
+    @property
+    def master_audio(self) -> Path:
+        return self.artifacts_dir / self.master_audio_name
+
+    @property
+    def audiobook(self) -> Path:
+        return self.artifacts_dir / self.audiobook_name
+
+    @property
+    def text(self) -> Path:
+        return self.artifacts_dir / self.text_name
+
+    def looks_like_project(self) -> bool:
+        return self.project_dir.is_dir() and self.book.exists() and self.config.exists()
+
+    def make_tree(self):
+        self.source_dir.mkdir(parents=True, exist_ok=True)
+        self.extras_dir.mkdir(parents=True, exist_ok=True)
+        self.records_dir.mkdir(parents=True, exist_ok=True)
+        self.artifacts_dir.mkdir(parents=True, exist_ok=True)
+        self.chapters_dir.mkdir(parents=True, exist_ok=True)
+
+
+@dataclass
+class ProjectConfig:
+    tts_voice: Voice = "am_michael"
+    tts_speed: float = 1.0
     lex_g2g_paths: Optional[list[str]] = None
     lex_g2p_paths: Optional[list[str]] = None
     override_author: Optional[str] = None
     override_series: Optional[str] = None
     output_path: Optional[str] = None
 
-    @classmethod
-    def from_yaml(cls, yaml_path: Union[Path, str]):
-        yaml_path = Path(yaml_path)
-        d = yaml.safe_load(yaml_path.open(encoding="utf-8"))
+    def metadata_overrides(self, none_ok=False) -> Mapping[str, str | None]:
+        d = {
+            "author": self.override_author,
+            "series": self.override_series,
+        }
+        if not none_ok:
+            d = not_none_dict(d)
+        return d
 
-        return cls(
-            project_dir=yaml_path.parent,
-            epub_path=d.get("epub"),
-            tts_voice=d.get("voice"),
-            tts_speed=d.get("speed"),
-            lex_g2g_paths=d.get("g2g"),
-            lex_g2p_paths=d.get("g2p"),
-            override_author=d.get("author"),
-            override_series=d.get("series"),
-            output_path=d.get("output_path"),
+    @classmethod
+    def from_dict(cls, d: dict) -> ProjectConfig:
+        valid_keys = [
+            "tts_voice",
+            "tts_speed",
+            "lex_g2g_paths",
+            "lex_g2p_paths",
+            "override_author",
+            "override_series",
+            "output_path",
+        ]
+        return cls(**{k: v for k, v in d.items() if k in valid_keys})
+
+    @classmethod
+    def from_source(cls, path: Path | str) -> ProjectConfig:
+        path = Path(path)
+        d = json.load(path.open("r", encoding="utf-8"))
+        return cls.from_dict(d)
+
+    def dump(self, path: Path | str):
+        json.dump(
+            asdict(self),
+            Path(path).open("w", encoding="utf-8"),
+            indent=4,
         )
 
-    @classmethod
-    def resolve(
-        cls,
-        patch: Optional[ProjectSpec],
-        snapshot: Optional[ProjectSpec],
-        result: Result,
-    ) -> ProjectSpec:
-        if patch is None and snapshot is None:
-            return cls()
-        return cls()
 
-    @property
-    def params(self):
-        return {}
+# StepName = Literal["INIT", "TTS", "PROCESS_AUDIO", "BUILD_M4B", "COPY_TO_LIBRARY"]
+class StepName(Enum):
+    INIT = "initialization"
+    TTS = "tts generation"
+    PROCESS_AUDIO = "audio processing"
+    BUILD_M4B = "building m4b"
+    COPY_TO_LIBRARY = "copying"
+
+
+ChapterStatus = Literal["NOT_STARTED", "IN_PROGRESS", "FINISHED"]
 
 
 @dataclass
 class ProjectState:
-    splits: list[AudioChapter]
-    files: set[str]
+    completed_steps: set[StepName] = field(default_factory=set)
+    completed_chapters: Mapping[int, ChapterStatus] = field(default_factory=dict)
+    artifacts: Mapping[str, Path] = field(default_factory=dict)
+    updated_at: str = ""
+
+    def __post_init__(self):
+        self.update_time()
+
+    def update_time(self):
+        self.updated_at = datetime.datetime.now().strftime("%B %d, %Y %I:%M:%S %p")
+
+    @classmethod
+    def from_source(cls, path: Path | str):
+        d = json.load(Path(path).open("r", encoding="utf-8"))
+        return cls(**d)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "completed_steps": [s.value for s in self.completed_steps],
+            "completed_chapters": self.completed_chapters,
+            "artifacts": self.artifacts,
+            "updated_at": self.updated_at,
+        }
+
+    @classmethod
+    def from_dict(cls, d) -> ProjectState:
+        return cls(
+            completed_steps={StepName(s) for s in d["completed_steps"]},
+            completed_chapters=d["completed_chapters"],
+            artifacts=d["artifacts"],
+            updated_at=d["updated_at"],
+        )
+
+    def dump(self, path: Path | str):
+        json.dump(
+            self.to_dict(),
+            Path(path).open("w", encoding="utf-8"),
+            indent=4,
+        )
 
 
 class AudiobookProject:
-    project_dir: Path
-    _open_result: str
+    paths: ProjectPaths
+    state: ProjectState
 
     book: Book
+
     voice: Voice
+    speed: float
     lexicon: Lexicon
+
+    output_path: Path | None = None
 
     processor: TTSProcessor
 
     chapters: Optional[List[AudioChapter]] = None
 
-    # Paths
-    state_file: str = "project.yaml"
-    fulltext: str = "fulltext.txt"
-    cover: str = "cover.jpg"
-    wavfiles: str = "files"
-    ffmeta: str = "ffmetadata"
+    def __init__(
+        self, config: ProjectConfig, paths: ProjectPaths, state: ProjectState
+    ) -> None:
+        self.paths = paths
+        self.state = state
 
-    def __init__(self, spec: ProjectSpec) -> None:
-        self.project_dir = spec.project_dir
-        self.book = Book(epub_path)
-        self.voice = tts_voice if tts_voice is not None else "am_michael"
-        self.speed = tts_speed if tts_speed is not None else 1.0
-        self.lexicon = Lexicon(lex_g2g_paths, lex_g2p_paths)
-        self.book.meta.override_author = override_author
-        self.book.meta.override_series = override_series
-        self.output_path = output_path
+        self.book = Book(self.paths.book)
+        self.book.meta.add_overrides(**config.metadata_overrides())
+
+        self.voice = config.tts_voice
+        self.speed = config.tts_speed
+        self.lexicon = Lexicon(config.lex_g2g_paths, config.lex_g2p_paths)
+
+        if config.output_path is not None:
+            self.output_path = Path(config.output_path)
+
+        self.state.completed_steps.add(StepName.INIT)
+        self.state.dump(self.paths.state)
 
     @classmethod
     def open(
@@ -195,87 +356,83 @@ class AudiobookProject:
         init_path: Path | str,
         config: ProjectConfig,
     ):
-
-        logging.info(f"Opening from {init_path}")
-
-        open_result = None
-
-        snapshot: Optional[ProjectSpec] = None
+        project_config: ProjectConfig
+        project_paths: ProjectPaths
         restore_state: ProjectState
 
+        open_result = None
         init_path = Path(init_path)
-        if init_path.is_dir() and (epubs := list(init_path.glob("*.epub"))):
-            # Is a potential project dir with an EPUB inside
-            if (state_file := (init_path / cls.state_file)).exists():
-                # project.yaml file exists
-                try:
-                    snapshot = ProjectSpec.from_yaml(state_file)
-                    # runtime_state = AudiobookProjectState()
-                    open_result = Result.RESUMED
-                except Exception as e:
-                    logging.error(e)
-                    # Could not load from project.yaml, ignore state and start fresh
-                    if len(epubs) == 1:
-                        snapshot = ProjectSpec(
-                            project_dir=init_path,
-                            epub_path=epubs[0],
-                        )
-                        open_result = Result.RESET_FROM_CORRUPTION
-                    else:
-                        open_result = Result.FAILED_MULTIPLE_EPUBS
-            else:
-                snapshot = ProjectSpec(
-                    project_dir=init_path,
-                    epub_path=epubs[0],
-                )
-                open_result = Result.NEW_FROM_EXISTING_DIR
-        elif init_path.is_file() and init_path.suffix == ".epub":
-            # Is an EPUB
-            try:
-                project_dir, epub_path = cls.new_project_dir(init_path)
-                snapshot = ProjectSpec(project_dir=project_dir, epub_path=epub_path)
-                open_result = Result.NEW_PROJECT
-            except Exception as e:
-                logging.error(e)
+        logging.info(f"Opening from {init_path}")
 
-        if open_result is None:
-            # Does not look compatible
+        project_paths = ProjectPaths(init_path)
+        # If the init_path looks like a preexisting project dir
+        if project_paths.looks_like_project():
+            # Load config from project.json
+            project_config = ProjectConfig.from_source(project_paths.config)
+            # Load state from state.json
+            restore_state = ProjectState.from_source(project_paths.state)
+            open_result = Result.RESUMED
+        # If the init_path looks like an epub
+        elif init_path.is_file() and init_path.suffix == ".epub":
+            # Use config from arguments
+            project_config = config
+            # Make a new project and move epub into it
+            project_paths = cls.new_project_dir(init_path)
+            # Start with a clear state
+            restore_state = ProjectState()
+            # Make file records
+            project_config.dump(project_paths.config)
+            restore_state.dump(project_paths.state)
+            project_paths.make_tree()
+            open_result = Result.NEW_PROJECT
+        else:
             open_result = Result.FAILED_INVALID_PATH
             logging.exception(f"{init_path} is not a valid starting path.")
             raise
 
-        # effective = AudiobookProjectSpec.resolve(
-        #     patch=patch, snapshot=snapshot, result=open_result
-        # )
-
-        obj = cls(**effective.params)
-        # if open_result == Result.RESUMED:
-        #     obj.rehydrate(runtime_state)
+        obj = cls(config=project_config, paths=project_paths, state=restore_state)
 
         return obj
+
+    """
+    Each stage is a function with:
+
+    Inputs: project.config, project.state, and filesystem artifacts
+
+    Outputs: artifacts + record files
+
+    State transition: mark completion only after outputs are known-good
+    """
 
     def rehydrate(self, state: ProjectState):
         pass
 
     @staticmethod
-    def new_project_dir(epub_path: Path) -> tuple[Path, Path]:
-        if not (epub_path.suffix == ".epub" and epub_path.exists()):
-            logging.exception(f"{epub_path} is invalid.")
+    def new_project_dir(source_path: Path) -> ProjectPaths:
+        new_paths: ProjectPaths
+
+        if not (source_path.suffix == ".epub" and source_path.is_file()):
+            logging.exception(f"{source_path} is invalid.")
             raise
 
         # Make dir
-        newdir = epub_path.parent / epub_path.stem
+        newdir = source_path.parent / source_path.stem
         newdir = newdir.expanduser().resolve()
         if newdir.exists():
-            logging.exception(f"{newdir} already exists.")
-            raise
+            logging.warning(f"{newdir} already exists.")
+            replace = confirm(f"{newdir} exists. Delete and replace?")
+            if not replace:
+                raise
+            else:
+                shutil.rmtree(str(newdir))
         newdir.mkdir(parents=True, exist_ok=False)
+        new_paths = ProjectPaths(newdir)
 
         # Move epub into it
-        new_epub_path = newdir / epub_path.name
-        epub_path.rename(new_epub_path)
+        new_paths.book.parent.mkdir(parents=True)
+        source_path.rename(new_paths.book)
 
-        return newdir, new_epub_path
+        return new_paths
 
     def init_dir(self, init_path):
         logging.info("Initializing Project")
@@ -527,3 +684,6 @@ class AudiobookProject:
             "g2p": g2p,
         }
         self.state["lexicon"] |= filter_dict(newstate)
+
+
+# %%

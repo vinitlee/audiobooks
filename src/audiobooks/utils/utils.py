@@ -1,7 +1,10 @@
-from typing import Any, Iterable, Optional
+from typing import Any, Iterable, Optional, TypeVar, Dict
+
+K = TypeVar("K")
+V = TypeVar("V")
 
 
-def not_none_dict(d: dict):
+def not_none_dict(d: Dict[K, V | None]) -> Dict[K, V]:
     """
     Strip None values from dictionary.
 
@@ -11,7 +14,7 @@ def not_none_dict(d: dict):
     return {k: v for k, v in d.items() if v is not None}
 
 
-def clean_dict(d: dict):
+def clean_dict(d: Dict[K, V]) -> Dict[K, V]:
     """
     Strip logical False values from dictionary.
 

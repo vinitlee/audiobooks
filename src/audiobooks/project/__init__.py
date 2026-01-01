@@ -1,6 +1,4 @@
-from .project import AudiobookProject
+from .project import AudiobookProject, ProjectConfig
 from .spec import *
 
-__all__ = [
-    "AudiobookProject",
-]
+__all__ = ["AudiobookProject", "ProjectConfig"]

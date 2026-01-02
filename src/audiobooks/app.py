@@ -41,6 +41,7 @@ def main(
 
     for path in paths:
         proj = AudiobookProject.open(path, config)
+        proj.run_all()
 
 
 def set_log_level(loglevel):

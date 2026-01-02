@@ -1,4 +1,4 @@
-from .tts import TTSProcessor, Voice
+from .tts import TTSProcessor, Voice, BlockList
 from .lexicon import Lexicon
 from .pipeline import KPipelineLazy
 

@@ -22,6 +22,8 @@ from ebooklib import epub
 import ebooklib
 import lxml.html
 
+from dataclasses import dataclass
+
 from audiobooks.utils.utils import flatten_deep
 
 
@@ -86,15 +88,16 @@ class Book:
         # and create Chapter
         self.chapters = [
             ch
-            for title, item_group in zip(title_toc, item_groups)
-            if (ch := Chapter(title, item_group)).is_valid()
+            for idx, (title, item_group) in enumerate(zip(title_toc, item_groups))
+            if (ch := Chapter(title, idx, item_group)).is_valid()
         ]
 
         self.chapters[0].insert(0, f"{self.meta.title} by {self.meta.author}", "h1")
 
-    @property
-    def fulltext(self, delimiter: str = "", chapter_delimiter: str = ""):
-        return delimiter.join([c.fulltext(chapter_delimiter) for c in self.chapters])
+    def fulltext(self, block_delimiter: str = "\n", chapter_delimiter: str = "\n---\n"):
+        return chapter_delimiter.join(
+            [c.fulltext(block_delimiter) for c in self.chapters]
+        )
 
     def __repr__(self) -> str:
         return f"{self.meta.title}: {len(self.chapters)} chapters"
@@ -211,9 +214,11 @@ class ElementBlock:
 
 class Chapter:
     _doc: lxml.html.HtmlElement
+    index: int
 
-    def __init__(self, title: str, items: list[epub.EpubItem]):
+    def __init__(self, title: str, index: int, items: list[epub.EpubItem]):
         self.title = title
+        self.index = index
 
         self._doc = lxml.html.HtmlElement()
 

@@ -1,2 +1,2 @@
 from .audio import AudioProcessor, AudioChapter
-from .book import Book
+from .book import Book, Chapter, ElementBlock

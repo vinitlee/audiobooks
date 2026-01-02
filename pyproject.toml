@@ -21,6 +21,8 @@ dependencies = [
     "dpath>=2.2.0",
     "types-lxml>=2025.11.25",
     "pip>=25.3",
+    "scipy>=1.16.3",
+    "resampy>=0.4.3",
 ]
 
 [project.optional-dependencies]

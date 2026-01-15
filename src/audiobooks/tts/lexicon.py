@@ -1,10 +1,11 @@
-from typing import List, Dict, Optional, Pattern
+from typing import List, Dict, Optional, Pattern, Self, Literal
 import logging
 import re
 
 import yaml
 from pathlib import Path
 
+from datetime import datetime
 
 class SubRule:
     __slots__ = ("pattern", "replace")
@@ -20,121 +21,131 @@ class SubRule:
         return self.pattern.sub(self.replace, text)
 
 
-class Lexicon:
-    _valid_suffixes = [".yaml"]
+class LexicalMap:
+    lut: Dict[str, str]
 
-    g2g_paths: List[str]
-    g2p_paths: List[str]
+    MAP_PATTERN: re.Pattern = re.compile(r"^(?P<key>.+): (?P<val>.*)$")
+    SPECIAL_PATTERN: re.Pattern = re.compile(r"^#(?P<cmd>\S+) (?P<args>.*)$")
 
-    g2g_rules: List[SubRule]
-    g2p_map: Dict[str, str]
+    VALID_MODES = ["str", "pattern"]
 
-    def __init__(
-        self,
-        g2g_paths: Optional[List[str]] = None,
-        g2p_paths: Optional[List[str]] = None,
-    ) -> None:
-        self.g2g_paths = []
-        self.g2p_paths = []
+    def __init__(self):
+        self.lut = {}
+        pass
 
-        self.g2g_rules = []
-        self.g2p_map = {}
+    @staticmethod
+    def process_key(k):
+        return k
 
-        self.set_maps(g2g_paths, g2p_paths)
+    @staticmethod
+    def process_val(v):
+        return v
 
-    def set_maps(
-        self,
-        g2g_paths: Optional[List[str]] = None,
-        g2p_paths: Optional[List[str]] = None,
-    ):
-        self.g2g_paths = []
-        self.g2p_paths = []
+    @classmethod
+    def from_lut(cls, lut: Dict[str, str]):
+        ll = cls()
+        ll.lut = lut
+        return ll
 
-        self.g2g_rules = []
-        self.g2p_map = {}
-        self.extend_maps(g2g_paths, g2p_paths)
+    @classmethod
+    def from_lex(cls, path: Path):
+        if path.suffix != ".lex":
+            logging.warning(f"{path} is not a *.lex")
+        ll = cls()
 
-    def extend_maps(
-        self,
-        g2g_paths: Optional[List[str]] = None,
-        g2p_paths: Optional[List[str]] = None,
-    ):
-        # Add to current (may be blank)
-        self.g2g_paths.extend(g2g_paths or [])
-        self.g2p_paths.extend(g2p_paths or [])
+        for l in path.open("r", encoding="utf-8"):
+            l = l.strip()
+            if not l:
+                continue
+            if l[0] == "#":
+                # Special functions
+                m = cls.SPECIAL_PATTERN.match(l)
+                if m:
+                    cmd = m.group("cmd")
+                    args = m.group("args")
+                    match cmd:
+                        case "include":
+                            # #include ./path/to/lut.lex
+                            include_path = Path(args)
+                            if not include_path.is_absolute():
+                                include_path = path.parent / include_path
+                            include_ll = cls.from_lex(include_path)
+                            ll.lut |= include_ll.lut
+                        case _:
+                            continue
+                continue
+            else:
+                # Normal mappings
+                m = cls.MAP_PATTERN.match(l)
+                if m:
+                    ll.lut[m.group("key")] = m.group("val")
+                continue
 
-        self.g2g_paths = self.filter_valid_paths(self.g2g_paths)
-        self.g2p_paths = self.filter_valid_paths(self.g2p_paths)
+        return ll
 
-        self.g2g_from_src(self.g2g_paths)
-        self.g2p_from_yaml(self.g2p_paths)
+    def __add__(self, other: Self) -> Self:
+        return self.from_lut(self.lut | other.lut)
 
-    def filter_valid_paths(self, paths: List[str]) -> List[str]:
-        p_paths = [Path(p).expanduser().resolve() for p in paths if p]
-        p_paths = [
-            p for p in p_paths if p.is_file() and p.suffix in self._valid_suffixes
-        ]
-        unique_paths = [str(p) for p in p_paths]
-        unique_paths = list(dict.fromkeys(unique_paths))
-        return unique_paths
 
-    def map_from_yaml(self, paths: List[str]) -> Dict[str, str]:
-        mapping = {}
-        for p in paths:
-            file = Path(p)
-            if file.suffix in self._valid_suffixes:
-                loaded_map = yaml.safe_load(file.open("r", encoding="utf-8")) or {}
-                if loaded_map and isinstance(loaded_map, dict):
-                    mapping |= loaded_map
-                else:
-                    logging.warning(f"{p} contains non-mapping data.")
-        return {str(k): "" if v is None else str(v) for k, v in mapping.items()}
+class LexicalPatternMap(LexicalMap):
+    pattern_lut: Dict[Pattern, str] | None
 
-    def g2g_from_src(self, paths: list[str]):
-        self.g2g_rules = []
-        for p in paths:
-            lines = Path(p).read_text(encoding="utf-8").splitlines()
-            for ln, l in enumerate(lines, start=1):
-                s = l.strip()
-                if not s or s.startswith("#"):
-                    continue
-                y = yaml.safe_load(l)
-                if isinstance(y, dict) and len(y):
-                    pat, rep = list(y.items())[0]
-                    # Strict enforcement
-                    if not (isinstance(pat, str) and isinstance(rep, str)):
-                        logging.warning(
-                            f"G2G Lexicons must be str:str. Issue in {p} @ {ln}"
-                        )
-                        continue
-                    # Uncomment to enable casting from other types
-                    # pat = str(pat)
-                    # if rep is None:
-                    #     rep = ""
-                    # rep = str(rep)
-                    self.g2g_rules.append(SubRule(pat, rep))
-                else:
-                    logging.warning(f"Found non-mapping data. Skipping {p}")
+    def __init__(self):
+        super().__init__()
+        self.pattern_lut = None
 
-    def g2p_from_yaml(self, paths: list[str]):
-        mapping = self.map_from_yaml(paths)
-        mapping = {k.lower(): v for k, v in mapping.items()}
-        self.g2p_map = mapping
+    def compile(self):
+        self.pattern_lut = {re.compile(k): v for k, v in self.lut.items()}
 
-    def g2g(self, string: str) -> str:
-        for rule in self.g2g_rules:
-            string = rule(string)
-        return string
+class G2PMap:
+    path: Path
+    map_: LexicalMap
+    _note: bool = False
 
-    def in_g2p(self, grapheme: str) -> bool:
-        return grapheme.lower() in self.g2p_map
+    def __init__(self,path:Path) -> None:
+        self.path = path
+        self.map_ = LexicalMap.from_lex(self.path)
 
-    def g2p(self, grapheme: str, default_p: str = "") -> str:
-        # TODO: Consider adding a fallback function that logs uncommon words not in g2p to class variable
-        return self.g2p_map.get(grapheme.lower(), default_p)
+    def in_map(self,k):
+        return k in self.map_.lut
+    
+    def notate(self):
+        if not self._note:
+            date_str = datetime.now().strftime("%B %d, %Y %I:%M:%S %p")
+            self.path.open("a",encoding="utf-8").write(f"#note {date_str}\n")
 
-    def to_dict(self):
-        return {
-            "g2g": self.g2g_paths,
-            "g2p": self.g2p_paths,
-        }
+            self._note = True
+    
+    def add_entry(self,k,v):
+        self.notate()
+        self.path.open("a").write(f"{k}: {v}")
+
+class G2GMap:
+    path: Optional[Path]
+    map_: LexicalPatternMap
+
+    def __init__(self,path:Path) -> None:
+        self.path = path
+        self.map_ = LexicalPatternMap.from_lex(self.path)
+
+        self.map_.compile()
+
+class Lexicon2:
+    g2g_path: Optional[Path]
+    g2p_path: Optional[Path]
+
+    g2g_map: LexicalPatternMap
+    g2p_map: LexicalMap
+
+    def __init__(self, g2g_path: Optional[Path], g2p_path: Optional[Path]) -> None:
+        self.g2g_path = g2g_path
+        self.g2p_path = g2p_path
+
+        self.g2g_map = LexicalPatternMap()
+        self.g2p_map = LexicalMap()
+        if self.g2g_path is not None:
+            self.g2g_map = LexicalPatternMap.from_lex(self.g2g_path)
+        if self.g2p_path is not None:
+            self.g2p_map = LexicalMap.from_lex(self.g2p_path)
+
+    def 

@@ -42,9 +42,9 @@ class Book:
 
         self.meta = BookMetadata(self.epub)
 
-        self.init_chapters()
+        # self.generate_chapters()
 
-    def init_chapters(self):
+    def generate_chapters(self):
         # Get Spine and TOC in IDs
         id_spine = [
             cast(epub.EpubItem, it).get_id()

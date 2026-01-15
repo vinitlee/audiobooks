@@ -1,5 +1,5 @@
 from .tts import TTSProcessor, Voice, BlockList
-from .lexicon import Lexicon
+from .lexicon import Lexicon, LexicalMap
 from .pipeline import KPipelineLazy
 
-__all__ = ["TTSProcessor", "Lexicon", "KPipelineLazy", "Voice"]
+__all__ = ["TTSProcessor", "Lexicon", "LexicalMap", "KPipelineLazy", "Voice"]

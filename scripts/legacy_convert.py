@@ -176,7 +176,7 @@ class TTSProject:
                 # if max_scale < scale:
                 #     print("Choosing lower scale: ", max_scale)
                 scale = min(scale, max_scale)
-                print(scale, max_scale)
+                # print(scale, max_scale)
                 full_audio *= scale
                 sf.write(output_path, full_audio, sr)
             else:
@@ -474,10 +474,15 @@ class TextBook:
             pass
 
         cover_items = list(self.book.get_items_of_type(ebooklib.ITEM_COVER))
-        self.cover = cv2.imdecode(
-            np.frombuffer(cover_items[0].content, np.uint8),
-            cv2.IMREAD_COLOR,
-        )
+        self.cover = np.zeros((600, 800, 3), dtype=np.uint8)
+        try:
+            self.cover = cv2.imdecode(
+                np.frombuffer(cover_items[0].content, np.uint8),
+                cv2.IMREAD_COLOR,
+            )
+        except:
+            print("Could not retrieve cover.")
+            print(cover_items)
 
 
 class Chapter:
@@ -680,7 +685,7 @@ my_proj = None
 if __name__ == "__main__":
     arguments = parse_arguments()
 
-    print(arguments)
+    # print(arguments)
 
     main(**arguments)
 # %%

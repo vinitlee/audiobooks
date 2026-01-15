@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import TYPE_CHECKING, cast, overload
+from typing import TYPE_CHECKING, cast, overload, Any
 
 if TYPE_CHECKING:
     from kokoro import KPipeline, KModel
@@ -39,6 +39,12 @@ class KPipelineLazy:
 
     def __getattr__(self, name: str):
         return getattr(self.load(), name)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        if name in []:
+            print("Custom attr set")
+        else:
+            super().__setattr__(name, value)
 
     def __call__(self, *args, **kwargs):
         return self.load()(*args, **kwargs)

@@ -102,8 +102,8 @@ class AudiobookProject:
 
     book: Book
 
-    voice: Voice
-    speed: float
+    # voice: Voice
+    # speed: float
     lexicon: Lexicon
 
     processor: TTSProcessor
@@ -225,8 +225,9 @@ class AudiobookProject:
     def prepare_runtime(self):
         logging.info("Preparing runtime environment")
         self.book = Book(self.paths.book)
-        self.book.chapters = self.book.chapters[:5]  # DEBUG
         self.book.meta.add_overrides(**self.config.metadata_overrides())
+        self.book.generate_chapters()
+        self.book.chapters = self.book.chapters[:5]  # DEBUG
 
         self.lexicon = Lexicon(self.config.lex_g2g_paths, self.config.lex_g2p_paths)
 
@@ -262,7 +263,11 @@ class AudiobookProject:
         Main bulk of the work.
         """
 
-        self.processor = TTSProcessor(self.lexicon)
+        self.processor = TTSProcessor(
+            self.lexicon,
+            self.config.tts_voice,
+            self.config.tts_speed,
+        )
 
         for chapter in self.book.chapters:
             if not self.state.chapter_is_complete(chapter.index):
@@ -291,38 +296,10 @@ class AudiobookProject:
     def generate_chapter_tts(self, chapter: Chapter):
         output_path = self.paths.chapter(chapter.index)
 
-        bl = BlockList(chapter)
+        chapter_bl = BlockList(chapter)
 
-        blocks = bl.blocks[:5]
-        strings = bl.strings[:5]
-
-        word_counts = [len(s.split()) for s in strings]
-        total_words = sum(word_counts)
-        word_counts_iter = iter(word_counts)
-        progress = tqdm(total=total_words, desc=chapter.title, unit="words")
-
-        generator = self.processor.pipeline(
-            strings,
-            voice=self.config.tts_voice,
-            speed=self.config.tts_speed,
-        )
-
-        audio_clips: list[list[np.typing.NDArray]] = [[] for b in blocks]
-        for result in generator:
-            idx = result.text_index
-            audio_tensor = result.audio
-            logging.debug(str(idx), str(audio_tensor))
-            if idx is not None and audio_tensor is not None:
-                audio = audio_tensor.detach().cpu().numpy()
-                audio_clips[idx].append(audio)
-            progress.update(next(word_counts_iter, 0))
-        progress.close()
-
-        for i, b in enumerate(blocks):
-            if b.override:
-                audio_clips[i] = [b.audio_data(self.processor.sample_rate)]
-
-        full_audio = np.concat([np.concat(c) for c in audio_clips])
+        audio_parts = self.processor.generate(chapter_bl, progress_title=chapter.title)
+        full_audio = np.concat(audio_parts)
 
         write_sound_atomic(output_path, full_audio, self.processor.sample_rate)
         self.state.add_artifact(f"ch_{chapter.index}", output_path)

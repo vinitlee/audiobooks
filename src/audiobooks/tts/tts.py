@@ -1,6 +1,9 @@
 from __future__ import annotations
 from typing import TYPE_CHECKING, cast, overload
 
+if TYPE_CHECKING:
+    from kokoro import KPipeline, KModel
+
 from typing import (
     Any,
     Callable,
@@ -15,13 +18,13 @@ from typing import (
     Literal,
     ClassVar,
     Generator,
+    Protocol,
+    Mapping,
 )
-
 from numpy._typing import NDArray
 
-if TYPE_CHECKING:
-    from kokoro import KPipeline, KModel
-    from misaki.en import G2P, MToken
+from misaki.en import G2P, MToken
+from misaki import en, espeak
 
 from pathlib import Path
 
@@ -37,7 +40,11 @@ from functools import lru_cache
 
 from .pipeline import KPipelineLazy, DEFAULT_KOKORO_REPO
 from .lexicon import Lexicon
+
 from audiobooks.core import Chapter, ElementBlock
+
+from tqdm import tqdm
+import logging
 
 # %%
 Voice = Literal[
@@ -61,14 +68,23 @@ class TTSProcessor:
     pipeline: KPipelineLazy
     lexicon: Lexicon
     sample_rate: ClassVar[int] = 24000
-    _unknown_words: dict[str, str] = {}
+    voice: Voice
+    speed: float
+    _unknown_words: dict[str, str]
+    _saved_g2p: G2P
 
     def __init__(
         self,
         lexicon: Lexicon,
+        voice: Voice = "am_michael",
+        speed: float = 1.0,
         pipeline_args: dict = {},
     ) -> None:
         self._unknown_words = {}
+
+        self.voice = voice
+        self.speed = speed
+
         self.init_pipeline(**pipeline_args)
 
     def init_pipeline(
@@ -85,15 +101,67 @@ class TTSProcessor:
 
         self.pipeline = KPipelineLazy.instance(**args)
 
+    def generate(self, bl: BlockList, progress_title="TTS Generate"):
+
+        blocks = bl.blocks[:5]  # DEBUG
+        strings = bl.strings[:5]  # DEBUG
+
+        self.pipeline.load()
+        if self.pipeline._obj is None:
+            raise RuntimeError("Pipeline object is None")
+
+        if isinstance(self.pipeline._obj.g2p, G2P):
+            self._saved_g2p = self.pipeline._obj.g2p
+        else:
+            raise RuntimeError(
+                f"G2P was of a different type: {type(self.pipeline._obj.g2p).__name__}"
+                "This project only support English G2P."
+            )
+        self.pipeline._obj.g2p = self.replacement_g2p()
+
+        generator = self.pipeline(
+            strings,
+            voice=self.voice,
+            speed=self.speed,
+        )
+
+        audio_clips: list[list[np.typing.NDArray]] = [[] for b in blocks]
+
+        word_counts = [len(s.split()) for s in strings]
+        total_words = sum(word_counts)
+        word_counts_iter = iter(word_counts)
+        progress = tqdm(total=total_words, desc=progress_title, unit="words")
+
+        print(strings)
+
+        for result in generator:
+            idx = result.text_index
+            audio_tensor = result.audio
+            logging.debug(str(idx), str(audio_tensor))
+            if idx is not None and audio_tensor is not None:
+                audio = audio_tensor.detach().cpu().numpy()
+                audio_clips[idx].append(audio)
+            progress.update(next(word_counts_iter, 0))
+        progress.close()
+
+        for i, b in enumerate(blocks):
+            if b.override:
+                audio_clips[i] = [b.audio_data(self.sample_rate)]
+
+        audio_parts = [np.concat(c) for c in audio_clips]
+
+        self.pipeline.g2p = self._saved_g2p
+
+        return audio_parts
+
     def get_unknown_words(self):
         """
         Use to generate an unknown words document
         """
         return self._unknown_words
 
-    def replacement_g2p(
-        self, stock_g2p: Callable[[str], Tuple[str, List[MToken]]]
-    ) -> Callable[[str], Tuple[str, List[MToken]]]:
+    # TODO: rewrite as a subclass of misaki.G2P
+    def replacement_g2p(self) -> Callable[[str], Tuple[str, List[MToken]]]:
         from misaki import en, espeak
 
         espeak_fallback = espeak.EspeakFallback(british=False)
@@ -112,10 +180,9 @@ class TTSProcessor:
         logging_g2p = en.G2P(trf=False, british=False, fallback=logging_fallback)
 
         def replacement_fn(text: str) -> Tuple[str, List[MToken]]:
+            orig_text = text  # DEBUG
             text = self.lexicon.g2g(text)
-            # TODO: make sure this is in the right place.
-            # I am not sure what text looks like here, but it might be too small.
-            # Try to run g2g on full chapter text.
+            logging.debug(f"{orig_text} -> {text}")
 
             gs, tokens = logging_g2p(text)
 
@@ -129,6 +196,66 @@ class TTSProcessor:
             return gs, tokens
 
         return replacement_fn
+
+
+class PatchedLexicon(en.Lexicon):
+    patch_rating: int = 5
+    patch_g2p_lut: Mapping[str, str]
+
+    def __init__(self, british, g2p_lut: Mapping[str, str]):
+        super().__init__(british=british)
+        self.patch_g2p_lut = g2p_lut
+
+    def lookup_(self, tk: MToken) -> str | None:
+        return self.patch_g2p_lut.get(tk.text, None)
+
+    def __call__(self, tk, ctx):
+        if (result := self.lookup_(tk)) is not None:
+            return (result, self.patch_rating)
+        return super().__call__(tk, ctx)
+
+
+class PatchedG2P(G2P):
+    _espeak: espeak.EspeakFallback
+
+    def __init__(self, lexicon_patch: Callable[[str], str], **kwargs):
+        """Initialize the G2P engine with a spaCy pipeline, lexicon configuration, and optional fallback resolver."""
+        super().__init__(**kwargs)
+
+        british = kwargs.get("british", False)
+
+        self.lexicon = PatchedLexicon(british, lexicon_patch)
+
+        self._espeak = espeak.EspeakFallback(british=british)
+        self.fallback = self.fallback_
+
+    def fallback_(self, token: MToken) -> tuple[str | None, int | None]:
+        espeak_output = self._espeak(token)
+
+        # Check if in lexicon
+        # If not, check English frequency and log to lexicon if low
+
+        return espeak_output
+
+    @staticmethod
+    def preprocess(text):
+        """Normalize inline markup, extract token-level features, and return aligned text, tokens, and feature map."""
+
+        # Run g2g regexes str -> str
+
+        return G2P.preprocess(text)
+
+    @staticmethod
+    def retokenize(tokens: List[MToken]) -> List[Union[MToken, List[MToken]]]:
+        """Split tokens into subtokens, handle punctuation and currency cases, and group into lexical word units."""
+        result_tokens = G2P.retokenize(tokens)
+        for i, w in reversed(list(enumerate(result_tokens))):
+            if not isinstance(w, list):
+                if w.phonemes is None:
+                    # If in Lexicon
+                    # w.phonemes, w.rating = lexicon(w.graphemes),5
+                    pass
+        return result_tokens
 
 
 class BlockList:
@@ -168,6 +295,9 @@ class BlockList:
 
     @staticmethod
     def conv_title(el: ElementBlock) -> Iterable[Block]:
+
+        # For use with
+        # WavBlock.from_file(random.choice(transition_sounds))
         transition_sounds = [
             # r"G:\Projects\audiobooks\assets\audio\strum_harp_gentle_in_#2-1767349191268.wav",
             r"G:\Projects\audiobooks\assets\audio\strum_harp_gentle_in_#2-1767349479476.wav",
@@ -178,7 +308,6 @@ class BlockList:
         ]
 
         return (
-            # WavBlock.from_file(random.choice(transition_sounds)),
             PauseBlock(0.2),
             TextBlock(el.text),
             PauseBlock(0.5),

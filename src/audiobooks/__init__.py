@@ -1,13 +1,3 @@
-from .project import AudiobookProject, ProjectConfig
-from .core import Book, AudioChapter, AudioProcessor
-from .tts import Voice
-from .app import main
+__version__ = "0.1.0"
 
-__all__ = [
-    "AudiobookProject",
-    "ProjectConfig",
-    "Book",
-    "AudioChapter",
-    "AudioProcessor",
-    "main",
-]
+__all__ = ["__version__"]

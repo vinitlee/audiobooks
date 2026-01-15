@@ -23,7 +23,11 @@ dependencies = [
     "pip>=25.3",
     "scipy>=1.16.3",
     "resampy>=0.4.3",
+    "ffmpeg-python>=0.2.0",
 ]
+
+[project.scripts]
+audiobooks = "audiobooks.cli:main"
 
 [project.optional-dependencies]
 cpu = [

@@ -1,3 +1,4 @@
+#include ./symbols.lex
 pl[ea]+se: please
 o+w+: ow
 phi+h: phee
@@ -10,3 +11,4 @@ ti+red+: tired
 thi+s+: this
 tuu+li+: tuuli
 freida: placeholder
+#include ./exclamations.lex

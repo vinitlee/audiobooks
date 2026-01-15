@@ -1,7 +1,18 @@
 from __future__ import annotations
 from typing import TYPE_CHECKING, cast, overload
 
-from typing import Any, Callable, Iterable, Optional, Set, Union, List, Dict, Union
+from typing import (
+    Any,
+    Callable,
+    Iterable,
+    Optional,
+    Set,
+    Union,
+    List,
+    Dict,
+    Union,
+)
+import typing
 
 if TYPE_CHECKING:
     from kokoro import KPipeline, KModel
@@ -13,7 +24,8 @@ import glob
 import logging
 
 from pathlib import Path
-from audiobooks import AudiobookProject, ProjectConfig, Voice
+from audiobooks.project import AudiobookProject, ProjectConfig
+from audiobooks.tts import Voice
 from audiobooks.utils import not_none_dict, clean_dict, ensure_list
 
 
@@ -89,18 +101,7 @@ def parse_arguments() -> dict:
         "-v",
         type=str,
         help="Kokoro TTS voice",
-        choices=[
-            "af_bella",
-            "af_nicole",
-            "af_sarah",
-            "af_sky",
-            "bf_emma",
-            "bf_isabella",
-            "am_adam",
-            "am_michael",
-            "bm_george",
-            "bm_lewis",
-        ],
+        choices=typing.get_args(Voice),
     )
     parser.add_argument(
         "--speed",
@@ -217,11 +218,9 @@ def parse_arguments() -> dict:
         expanded_paths = expanded_paths.union(glob.glob(p))
     set_args["paths"] = sorted(list(expanded_paths))
 
-    print(f"\n------ args ------\n{set_args}\n------------------\n")
     return set_args
 
 
-my_proj = None
 if __name__ == "__main__":
     arguments = parse_arguments()
 

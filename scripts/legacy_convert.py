@@ -15,6 +15,7 @@ import re
 import subprocess
 import datetime
 import shutil
+import itertools
 
 import argparse
 import yaml
@@ -279,26 +280,27 @@ class TTSProject:
             cmd += ["-c:v", "copy"]  # just copy video
             cmd += ["-map_metadata", "2"]  # pull metadata from ffmetadata
             cmd += ["-map_chapters", "2"]  # pull chapters from ffmetadata
-            cmd += ["-metadata:s:v:0", 'title="Cover"']
-            cmd += ["-metadata:s:v:0", 'comment="Cover (front)"']
+            cmd += ["-metadata:s:v:0", "title=Cover"]
+            cmd += ["-metadata:s:v:0", "comment=Cover (front)"]
             cmd += ["-disposition:v:0", "attached_pic"]
             cmd += ["-movflags", "+faststart"]  # stream-friendly
             cmd += [m4b_path]
 
             Path(m4b_path).unlink(missing_ok=True)
-            subprocess.run(cmd, shell=True)
+            subprocess.run(cmd, check=True)
 
             self.data["completed"] = True
             self.write_data_file()
 
     def copy_to_library(self, parent_dir: Path | str, overwrite=False, epub=False):
-        parent_dir = Path(parent_dir)
+        parent_dir = Path(parent_dir).expanduser().resolve()
         m4b_src = Path(self.data.get("m4b_path", ""))
         if not str(m4b_src):
             print("Source m4b not found, aborting.")
             pass
 
         book_dir = parent_dir / m4b_src.stem
+        print("book_dir is ", book_dir)
         book_dir.mkdir(parents=True, exist_ok=True)
         m4b_filename = m4b_src.name
         m4b_dest = book_dir / m4b_filename
@@ -421,12 +423,19 @@ class TextBook:
 
     def unpack_chapters(self):
         # Spine with href-style ids
+        flat_toc = []
+        for el in self.book.toc:
+            if isinstance(el, tuple):
+                print("tuple in toc detected: first element is ", el[0])
+                flat_toc.extend(el[1])
+            else:
+                flat_toc.append(el)
+
         explicit_spine = [
             self.book.get_item_with_id(iid).file_name for iid, _ in self.book.spine
         ]
-        range_indices = [
-            explicit_spine.index(el.href.split("#")[0]) for el in self.book.toc
-        ]
+        range_indices = [explicit_spine.index(el.href.split("#")[0]) for el in flat_toc]
+
         # Groups of chapters that correspond with the TOC entries
         href_groups = [
             explicit_spine[slice(*i)]
@@ -437,7 +446,7 @@ class TextBook:
             [self.book.get_item_with_href(href) for href in g] for g in href_groups
         ]
 
-        for i, entry in enumerate(self.book.toc):
+        for i, entry in enumerate(flat_toc):
             title = entry.title
             # item = self.book.get_item_with_href(entry.href.split("#")[0])
             items = item_groups[i]

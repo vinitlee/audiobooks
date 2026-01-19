@@ -130,7 +130,20 @@ class BookMetadata:
                 cv2.IMREAD_COLOR,
             )
         else:
-            warnings.warn("Could not get cover image.")
+            warnings.warn(
+                "Could not get cover image. Defaulting to first image I find."
+            )
+            images = list(epub_obj.get_items_of_type(ebooklib.ITEM_IMAGE))
+            if images:
+                self.cover = cv2.imdecode(
+                    np.frombuffer(images[0].content, np.uint8),
+                    cv2.IMREAD_COLOR,
+                )
+            else:
+                warnings.warn(
+                    "Could not get any image. Giving up and providing a black square."
+                )
+                self.cover = np.zeros((512, 512, 3), dtype=np.uint8)
 
         # Inferred tags
         self._tags = list(self.epub_dc.keys())

@@ -1,7 +1,9 @@
-from typing import Any, Iterable, Optional, TypeVar, Dict
+from typing import Any, Iterable, Optional, TypeVar, Dict, Callable
+from pathlib import Path
 
 K = TypeVar("K")
 V = TypeVar("V")
+T = TypeVar("T")
 
 
 def not_none_dict(d: Dict[K, V | None]) -> Dict[K, V]:
@@ -42,6 +44,18 @@ def filter_dict(
     return {k: v for k, v in d.items() if is_valid(k, v)}
 
 
+def maybe_parse(val: Any, parser: Callable[[Any], T]) -> Optional[T]:
+    if val is None:
+        return None
+    return parser(val)
+
+
+def maybe_dump(val: Any, dumper: Callable[[T], Any]) -> Any:
+    if val is None:
+        return None
+    return dumper(val)
+
+
 def ensure_list(e: Any):
     """
     Package non-list values as a list
@@ -60,3 +74,7 @@ def flatten_deep(nested_iterable):
             yield from flatten_deep(item)
         else:
             yield item
+
+
+def maybe_path(v: Optional[Path | str]) -> Optional[Path]:
+    return Path(v) if v is not None else None

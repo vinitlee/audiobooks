@@ -16,6 +16,7 @@ from typing import (
     Mapping,
     Literal,
 )
+import attrs
 
 if TYPE_CHECKING:
     from kokoro import KPipeline, KModel
@@ -71,7 +72,6 @@ import logging
 # Project Libraries
 from audiobooks.core.book import Book
 from audiobooks.tts.tts import Lexicon, TTSProcessor, KPipelineLazy, Voice
-from audiobooks.core.audio import AudioChapter, AudioProcessor
 from audiobooks.utils import (
     not_none_dict,
     clean_dict,
@@ -79,7 +79,11 @@ from audiobooks.utils import (
     filter_dict,
     confirm,
     write_json_atomic,
+    maybe_parse,
+    maybe_dump,
+    maybe_path,
 )
+from audiobooks.utils import write_jsonl_atomic
 
 
 class Result(Enum):
@@ -112,10 +116,11 @@ class ProjectPaths:
     state_name: str = "state.json"
     master_audio_name: str = "master.m4a"
     audiobook_name: str = "final.m4b"
-    chapter_record_name: str = "chapters.json"
+    chapter_record_name: str = "chapters.jsonl"
     text_name: str = "book.txt"
     book_name: str = "book.epub"
     cover_name: str = "cover.jpg"
+    ffmetadata_name: str = "ffmetadata"
 
     source_dir_name: str = "source"
     records_dir_name: str = "records"
@@ -133,7 +138,7 @@ class ProjectPaths:
         source/
             book.epub
         records/
-            ?
+            chapters.json
         artifacts/
             extras/
                 cover.jpg
@@ -181,6 +186,10 @@ class ProjectPaths:
         return self.extras_dir / self.cover_name
 
     @property
+    def ffmetadata(self) -> Path:
+        return self.extras_dir / self.ffmetadata_name
+
+    @property
     def chapters_dir(self) -> Path:
         return self.artifacts_dir / self.chapters_dir_name
 
@@ -220,15 +229,15 @@ class ProjectPaths:
         self.chapters_dir.mkdir(parents=True, exist_ok=exist_ok)
 
 
-@dataclass
+@attrs.define
 class ProjectConfig:
     tts_voice: Voice = "am_michael"
     tts_speed: float = 1.0
-    lex_g2g_paths: Optional[list[str]] = None
-    lex_g2p_paths: Optional[list[str]] = None
+    lex_g2g_path: Optional[Path] = attrs.field(default=None, converter=maybe_path)
+    lex_g2p_path: Optional[Path] = attrs.field(default=None, converter=maybe_path)
     override_author: Optional[str] = None
     override_series: Optional[str] = None
-    output_path: Optional[str] = None
+    output_path: Optional[Path] = attrs.field(default=None, converter=maybe_path)
     flag_init_only: bool = False
 
     def metadata_overrides(self, none_ok=False) -> Mapping[str, str | None]:
@@ -242,15 +251,7 @@ class ProjectConfig:
 
     @classmethod
     def from_dict(cls, d: dict) -> ProjectConfig:
-        valid_keys = [
-            "tts_voice",
-            "tts_speed",
-            "lex_g2g_paths",
-            "lex_g2p_paths",
-            "override_author",
-            "override_series",
-            "output_path",
-        ]
+        valid_keys = {f.name for f in attrs.fields(cls) if f.init}
         return cls(**{k: v for k, v in d.items() if k in valid_keys})
 
     @classmethod
@@ -259,7 +260,14 @@ class ProjectConfig:
         return cls.from_dict(d)
 
     def to_dict(self):
-        return asdict(self)
+        d = attrs.asdict(self)
+
+        d["lex_g2g_path"] = maybe_dump(self.lex_g2g_path, str)
+        d["lex_g2p_path"] = maybe_dump(self.lex_g2p_path, str)
+
+        d["output_path"] = maybe_dump(self.output_path, str)
+
+        return d
 
 
 class StepName(Enum):
@@ -329,3 +337,79 @@ class ProjectState:
     def from_source(cls, path: Path):
         d = json.load(Path(path).open("r", encoding="utf-8"))
         return cls.from_dict(d)
+
+
+@attrs.define
+class ChapterAudio:
+    name: str
+    index: int
+    duration: float
+    # TODO: consider adding a hash of title + text/phonemes + params
+
+    @classmethod
+    def from_dict(cls, d: dict):
+        valid_keys = {f.name for f in attrs.fields(cls) if f.init}
+        return cls(**{k: v for k, v in d.items() if k in valid_keys})
+
+    def to_dict(self) -> dict:
+        d = attrs.asdict(self)
+
+        # d["artifact"] = maybe_dump(self.artifact, str)
+
+        return d
+
+
+class ChapterRecord:
+    chapters: Dict[int, ChapterAudio]
+    updated_at: str = ""
+
+    def __init__(self, chapters: list[ChapterAudio] = []):
+        self.chapters = {ch.index: ch for ch in chapters}
+        self.update_time()
+
+    def update_time(self):
+        self.updated_at = datetime.datetime.now().strftime("%B %d, %Y %I:%M:%S %p")
+
+    def add_chapter(self, ch: ChapterAudio):
+        self.chapters[ch.index] = ch
+        self.update_time()
+
+    @property
+    def chapter_list(self):
+        return [ch for _, ch in self.chapters.items()]
+
+    @classmethod
+    def from_dict(cls, d: dict):
+        ch_list = []
+        if "chapters" in d:
+            ch_list = [ChapterAudio.from_dict(ch_d) for ch_d in d["chapters"]]
+        return cls(ch_list)
+
+    @classmethod
+    def from_source(cls, p: Path) -> Self:
+        if p.suffix != ".jsonl":
+            raise ValueError(f"Invalid file extension for {p}, file must be a *.jsonl")
+
+        chapters = []
+
+        with p.open("r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    try:
+                        chapters.append(ChapterAudio(**json.loads(line)))
+                    except json.JSONDecodeError as e:
+                        logging.error(f"Error parsing line: {e}")
+                        continue
+        return cls(chapters)
+
+    def to_dicts(self) -> List[dict]:
+        return [ch.to_dict() for ch in self.chapter_list]
+
+    def dump(self, dest: Path):
+        self.update_time()
+        write_jsonl_atomic(self.to_dicts(), dest)
+
+    def __iter__(self):
+        for ch in self.chapter_list:
+            yield ch

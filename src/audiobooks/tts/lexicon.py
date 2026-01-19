@@ -1,11 +1,13 @@
-from typing import List, Dict, Optional, Pattern, Self, Literal
+from typing import List, Dict, Optional, Pattern, Self, Literal, Any
 import logging
 import re
+import attrs
 
 import yaml
 from pathlib import Path
 
 from datetime import datetime
+
 
 class SubRule:
     __slots__ = ("pattern", "replace")
@@ -33,6 +35,12 @@ class LexicalMap:
         self.lut = {}
         pass
 
+    def keys(self):
+        return self.lut.keys()
+
+    def items(self):
+        return self.lut.items()
+
     @staticmethod
     def process_key(k):
         return k
@@ -48,7 +56,7 @@ class LexicalMap:
         return ll
 
     @classmethod
-    def from_lex(cls, path: Path):
+    def from_file(cls, path: Path):
         if path.suffix != ".lex":
             logging.warning(f"{path} is not a *.lex")
         ll = cls()
@@ -69,7 +77,7 @@ class LexicalMap:
                             include_path = Path(args)
                             if not include_path.is_absolute():
                                 include_path = path.parent / include_path
-                            include_ll = cls.from_lex(include_path)
+                            include_ll = cls.from_file(include_path)
                             ll.lut |= include_ll.lut
                         case _:
                             continue
@@ -86,6 +94,9 @@ class LexicalMap:
     def __add__(self, other: Self) -> Self:
         return self.from_lut(self.lut | other.lut)
 
+    def __call__(self, k: str) -> Optional[str]:
+        return self.lut.get(k, None)
+
 
 class LexicalPatternMap(LexicalMap):
     pattern_lut: Dict[Pattern, str] | None
@@ -93,59 +104,59 @@ class LexicalPatternMap(LexicalMap):
     def __init__(self):
         super().__init__()
         self.pattern_lut = None
+        self.compile()
+
+    @classmethod
+    def from_file(cls, path: Path):
+        lpm = super().from_file(path)
+        lpm.compile()
+        return lpm
 
     def compile(self):
         self.pattern_lut = {re.compile(k): v for k, v in self.lut.items()}
 
-class G2PMap:
-    path: Path
-    map_: LexicalMap
-    _note: bool = False
+    def __call__(self, text: str) -> str:
+        if self.pattern_lut is not None:
+            for pattern, sub in self.pattern_lut.items():
+                text = pattern.sub(sub, text)
+        return text
 
-    def __init__(self,path:Path) -> None:
-        self.path = path
-        self.map_ = LexicalMap.from_lex(self.path)
 
-    def in_map(self,k):
-        return k in self.map_.lut
-    
-    def notate(self):
-        if not self._note:
-            date_str = datetime.now().strftime("%B %d, %Y %I:%M:%S %p")
-            self.path.open("a",encoding="utf-8").write(f"#note {date_str}\n")
-
-            self._note = True
-    
-    def add_entry(self,k,v):
-        self.notate()
-        self.path.open("a").write(f"{k}: {v}")
-
-class G2GMap:
-    path: Optional[Path]
-    map_: LexicalPatternMap
-
-    def __init__(self,path:Path) -> None:
-        self.path = path
-        self.map_ = LexicalPatternMap.from_lex(self.path)
-
-        self.map_.compile()
-
-class Lexicon2:
+class Lexicon:
+    # The Lexicon can be called without either of the paths
     g2g_path: Optional[Path]
     g2p_path: Optional[Path]
 
-    g2g_map: LexicalPatternMap
-    g2p_map: LexicalMap
+    # But it will always provide at least identity transforms
+    g2g: LexicalPatternMap
+    g2p: LexicalMap
 
     def __init__(self, g2g_path: Optional[Path], g2p_path: Optional[Path]) -> None:
         self.g2g_path = g2g_path
         self.g2p_path = g2p_path
 
-        self.g2g_map = LexicalPatternMap()
-        self.g2p_map = LexicalMap()
-        if self.g2g_path is not None:
-            self.g2g_map = LexicalPatternMap.from_lex(self.g2g_path)
-        if self.g2p_path is not None:
-            self.g2p_map = LexicalMap.from_lex(self.g2p_path)
+        self.g2g = (
+            LexicalPatternMap.from_file(self.g2g_path)
+            if self.g2g_path is not None
+            else LexicalPatternMap()
+        )
+        self.g2p = (
+            LexicalMap.from_file(self.g2p_path)
+            if self.g2p_path is not None
+            else LexicalMap()
+        )
 
-    def 
+    def amend_g2p(self, d: Dict):
+        if self.g2p_path is None:
+            logging.error(
+                "g2p_path is None when we're trying to write unknown words to it"
+            )
+            return
+        sorted_d = {k: v for k, v in sorted(d.items())}
+        date_str = datetime.now().strftime("%B %d, %Y %I:%M:%S %p")
+        append_str = ""
+        append_str += f"\n\n#unknown_words@{date_str}"
+        for k, v in sorted_d.items():
+            append_str += f"\n{k}: {v}"
+        with self.g2p_path.open("a") as f:
+            f.write(append_str)

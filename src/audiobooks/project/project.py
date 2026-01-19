@@ -53,6 +53,7 @@ from enum import Enum
 
 # Math
 import numpy as np
+import cv2
 
 # import cv2
 # import torch
@@ -74,7 +75,11 @@ import logging
 # Project Libraries
 from audiobooks.core.book import Book, Chapter
 from audiobooks.tts.tts import Lexicon, TTSProcessor, KPipelineLazy, Voice, BlockList
-from audiobooks.core.audio import AudioChapter, AudioProcessor
+from audiobooks.core.audio import (
+    master_audio_from_chapters,
+    m4b_from_master_audio,
+    generate_ffmetadata,
+)
 from audiobooks.utils import (
     not_none_dict,
     clean_dict,
@@ -83,12 +88,15 @@ from audiobooks.utils import (
     confirm,
     write_json_atomic,
     write_sound_atomic,
+    copy_atomic,
 )
 
 from .spec import (
     ProjectConfig,
     ProjectPaths,
     ProjectState,
+    ChapterRecord,
+    ChapterAudio,
     StepName,
     ProjectFlags,
     Result,
@@ -108,7 +116,7 @@ class AudiobookProject:
 
     processor: TTSProcessor
 
-    chapters: Optional[List[AudioChapter]] = None
+    # chapters: Optional[List[AudioChapter]] = None
 
     STEP_ORDER: ClassVar[list[StepName]] = [
         StepName.INIT,
@@ -227,9 +235,10 @@ class AudiobookProject:
         self.book = Book(self.paths.book)
         self.book.meta.add_overrides(**self.config.metadata_overrides())
         self.book.generate_chapters()
-        self.book.chapters = self.book.chapters[:5]  # DEBUG
+        self.book.chapters = self.book.chapters
 
-        self.lexicon = Lexicon(self.config.lex_g2g_paths, self.config.lex_g2p_paths)
+        # TODO: Consider moving lexicon creation into TTSProcessor and just instantiating that here instead
+        self.lexicon = Lexicon(self.config.lex_g2g_path, self.config.lex_g2p_path)
 
     # Init
 
@@ -269,13 +278,22 @@ class AudiobookProject:
             self.config.tts_speed,
         )
 
+        chapter_record = ChapterRecord()
+        if self.paths.chapter_record.exists():
+            chapter_record = ChapterRecord.from_source(self.paths.chapter_record)
+
         for chapter in self.book.chapters:
             if not self.state.chapter_is_complete(chapter.index):
-                self.generate_chapter_tts(chapter)
+                ch = self.generate_chapter_tts(chapter)
+                chapter_record.add_chapter(ch)
+                chapter_record.dump(self.paths.chapter_record)
             else:
                 logging.info(
                     f"Chapter @{chapter.index}, '{chapter.title}' already generated, skipping."
                 )
+
+        # Save unknown words
+        self.lexicon.amend_g2p(self.processor.unknown_words)
 
         if self.validate_step_tts():
             self.state.step_set_complete(StepName.TTS)
@@ -293,7 +311,7 @@ class AudiobookProject:
         )
         return all([all_chapters_complete, all_chapters_exist])
 
-    def generate_chapter_tts(self, chapter: Chapter):
+    def generate_chapter_tts(self, chapter: Chapter) -> ChapterAudio:
         output_path = self.paths.chapter(chapter.index)
 
         chapter_bl = BlockList(chapter)
@@ -307,6 +325,13 @@ class AudiobookProject:
             self.state.chapter_set_complete(chapter_number=chapter.index)
             self.commit_state()
 
+            return ChapterAudio(
+                chapter.title,
+                chapter.index,
+                len(full_audio) / self.processor.sample_rate,
+            )
+        raise AssertionError(f"generate_chapter_tts for {chapter} failed to validate")
+
     def validate_chapter_tts(self, chapter: Chapter):
         """
         Checks to verify that tts has completed successfully.
@@ -318,6 +343,14 @@ class AudiobookProject:
 
     def step_process_audio(self):
 
+        # Combine all the previously generated chapter audio files into a master m4a
+
+        chapter_record = ChapterRecord.from_source(self.paths.chapter_record)
+        audio_paths = [self.paths.chapter(ch.index) for ch in chapter_record]
+        output_path = self.paths.master_audio
+        master_audio_from_chapters(audio_paths, output_path)
+        self.state.add_artifact("master_audio", output_path)
+
         if self.validate_step_process_audio():
             self.state.step_set_complete(StepName.PROCESS_AUDIO)
             self.commit_state()
@@ -326,11 +359,35 @@ class AudiobookProject:
         """
         Checks to verify that process_audio has completed successfully.
         """
-        return False
+        master_audio_exists = self.paths.master_audio.exists()
+        master_audio_nonzero = self.paths.master_audio.stat().st_size > 0
+        return master_audio_exists and master_audio_nonzero
 
     # Build M4B
 
     def step_build_m4b(self):
+
+        chapter_record = ChapterRecord.from_source(self.paths.chapter_record)
+        # Generate ffmetadata from ChapterRecord
+        generate_ffmetadata(
+            self.paths.ffmetadata,
+            str(self.book.meta.title),
+            str(self.book.meta.author),
+            str(self.book.meta.year),
+            chapter_record,
+        )
+
+        # Grab Cover Image
+        cover_img = self.book.meta.cover
+        cv2.imwrite(str(self.paths.cover_img), cover_img)
+
+        # Convert m4a + ffmetadata + cover -> m4b
+        m4b_from_master_audio(
+            self.paths.master_audio,
+            self.paths.cover_img,
+            self.paths.ffmetadata,
+            self.paths.audiobook,
+        )
 
         if self.validate_step_build_m4b():
             self.state.step_set_complete(StepName.BUILD_M4B)
@@ -340,11 +397,28 @@ class AudiobookProject:
         """
         Checks to verify that build_m4b has completed successfully.
         """
-        return False
+        m4b_exists = self.paths.audiobook.exists()
+        m4b_nonzero = self.paths.audiobook.stat().st_size > 0
+        return m4b_exists and m4b_nonzero
 
     # Copy to library
 
     def step_copy_to_library(self):
+        if self.config.output_path is None:
+            return False
+
+        title = str(self.book.meta.title)[:255].strip()
+
+        output_path_base = self.config.output_path / title / title
+        output_path_base.parent.mkdir(parents=True, exist_ok=True)
+
+        output_path_m4b = output_path_base.with_suffix(self.paths.audiobook.suffix)
+        output_path_epub = output_path_base.with_suffix(self.paths.book.suffix)
+
+        copy_atomic(self.paths.audiobook, output_path_m4b)
+        self.state.add_artifact("library_m4b", output_path_m4b)
+        copy_atomic(self.paths.book, output_path_epub)
+        self.state.add_artifact("library_epub", output_path_epub)
 
         if self.validate_step_copy_to_library():
             self.state.step_set_complete(StepName.COPY_TO_LIBRARY)
@@ -355,9 +429,16 @@ class AudiobookProject:
         Checks to verify that copy_to_library has completed successfully.
         """
         if self.config.output_path is None:
+            logging.info("No output path set.")
             return False
 
-        return False
+        output_path_m4b = self.state.artifacts.get("library_m4b")
+        output_path_epub = self.state.artifacts.get("library_epub")
+
+        if output_path_m4b is None or output_path_epub is None:
+            return False
+
+        return output_path_m4b.exists() and output_path_epub.exists()
 
     def run_all(self):
         self.prepare_runtime()
@@ -378,216 +459,4 @@ class AudiobookProject:
                 logging.error(f"{step.name} was not successful.")
                 break
 
-    # def step_index(self, step_name: StepName):
-    #     return self.STEP_ORDER.index(step_name)
-
-    # def make_splits(self):
-    #     """
-    #     For each chapter
-    #         Generates TTS
-    #         Saves split wav
-    #         Log split data
-    #     """
-    #     print("\n### Making Splits ###")
-    #     tts_processor = TTSProcessor(self.lexicon)
-    #     self.complete["splits"] = True
-    #     self.save_state()
-
-    # def make_master(self):
-    #     """
-    #     Combine all raw splits into a compressed master file
-    #     Process like normalizing volume, compression, etc
-    #     """
-    #     print("\n### Making Master ###")
-    #     pass
-
-    # def make_m4b(self):
-    #     """
-    #     Turns master file into m4b
-    #     Generates needed helper files
-    #     Saves m4b
-    #     """
-    #     print("\n### Making M4B ###")
-    #     pass
-
-    # def copy_to_library(self):
-    #     """
-    #     (Optional)
-    #     Copies m4b (and epub) to the library location
-    #     """
-    #     pass
-
-    # def run(self):
-    #     self.make_splits()
-    #     self.make_master()
-    #     self.make_m4b()
-    #     self.copy_to_library()
-
-    # # ------------------------------------------------------------------------
-
-    # # -- State --
-
-    # def restore_from_dict(self, d: dict):
-    #     pass
-
-    # def to_dict(self):
-    #     d = {
-    #         # "title": None,
-    #         # "author": None,
-    #         # "series": None,
-    #         # "progress": self.progress.to_dict(),
-    #         # "book": {"epub": None},
-    #         # "tts": {
-    #         #     "voice": "am_michael",
-    #         #     "speed": 1.0,
-    #         # },
-    #         # "lexicon": {
-    #         #     "g2g": [],
-    #         #     "g2p": [],
-    #         # },
-    #         # "output": None,
-    #         # "saved": None,
-    #     }
-
-    #     return d
-
-    # def get_state(self, path: str):
-    #     return dpath.util.get(self.state, path, default=None)
-
-    # def set_state(self, path: Union[str, list[str]], val: Any):
-    #     return dpath.util.new(self.state, path, val)
-
-    # def save_state(self):
-    #     self.set_state("saved", datetime.datetime.now())
-    #     yaml_stream = (self.dir / self.state_file).open("w", encoding="utf-8")
-    #     yaml.dump(self.state, yaml_stream, allow_unicode=True, sort_keys=False)
-    #     yaml_stream.close()
-
-    #     # print(f"Saved state:\n{yaml.dump(self.state)}")
-
-    # def load_state(self):
-    #     linked = ["progress", "tts"]
-    #     yaml_stream = (self.dir / self.state_file).open("r", encoding="utf-8")
-
-    #     loaded = yaml.load(yaml_stream, yaml.FullLoader)
-    #     self.state |= filter_dict(loaded, blacklist=linked)
-    #     # Assign linked entries
-    #     self.complete |= loaded.get("progress", {})
-    #     self.set_state_tts(**filter_dict(loaded["tts"], whitelist=["voice", "speed"]))
-
-    # # -- Book --
-
-    # def init_book(self):
-    #     epub_path = self.dir / self.epub
-    #     self.book = Book(epub_path)
-    #     state_overrides = {
-    #         k: v
-    #         for k in ["title", "author", "series"]
-    #         if (v := self.state.get(k, None))
-    #     }
-    #     self.book.meta.add_overrides(state_overrides)
-
-    #     (self.dir / self.fulltext).write_text(self.book.fulltext, encoding="utf-8")
-    #     self.set_state_book_metadata(
-    #         {
-    #             "title": self.book.meta.title,
-    #             "author": self.book.meta.author,
-    #             "series": self.book.meta.series,
-    #         }
-    #     )
-
-    # @property
-    # def epub(self) -> str:
-    #     fromstate = self.get_state("book/epub")
-    #     if fromstate is None:
-    #         found = self.find_epub()
-    #         if found:
-    #             self.epub = found
-    #             return found
-    #         else:
-    #             raise Exception("EPUB could not be found")
-    #     return str(fromstate)
-
-    # @epub.setter
-    # def epub(self, val):
-    #     self.set_state("book/epub", val)
-
-    # def find_epub(self):
-    #     epubs = list(self.dir.glob("*.epub"))
-    #     # If there is an EPUB in the directory
-    #     if len(epubs):
-    #         if len(epubs) > 1:
-    #             logging.warning("There seem to be multiple EPUBs.")
-    #         return epubs[0].name
-
-    # def set_state_book_metadata(self, mapping: Optional[dict[str, str | None]] = None):
-    #     if mapping is not None:
-    #         valid_keys = ["title", "author", "series"]
-    #         new_vals = filter_dict(mapping, whitelist=valid_keys)
-    #         self.state.update(new_vals)
-
-    # def get_state_book_metdata(self):
-    #     valid_keys = ["title", "author", "series"]
-    #     return {k: self.state[k] for k in valid_keys if self.state[k]}
-
-    # # -- TTS --
-
-    # @property
-    # def tts_params(self):
-    #     return self.state.get("tts", {})
-
-    # def set_state_tts(self, voice: Optional[str] = None, speed: Optional[float] = None):
-    #     newstate = filter_dict({"voice": voice, "speed": speed})
-    #     self.state["tts"] = self.tts_params | newstate
-
-    # # -- Lexicon --
-
-    # def init_lexicon(
-    #     self,
-    #     g2g_paths: Optional[List[str]] = None,
-    #     g2p_paths: Optional[List[str]] = None,
-    # ):
-    #     g2g_full_paths = []
-    #     g2p_full_paths = []
-
-    #     g2g_full_paths.extend(g2g_paths or [])
-    #     g2p_full_paths.extend(g2p_paths or [])
-
-    #     g2g_full_paths.extend(self.lexicon_sources.get("g2g", []))
-    #     g2p_full_paths.extend(self.lexicon_sources.get("g2p", []))
-
-    #     # Instantiate Lexicon
-    #     self.lexicon = Lexicon(g2g_full_paths, g2p_full_paths)
-    #     # TODO: Consider moving this to save_state
-    #     self.set_state_lexicon_sources(
-    #         self.lexicon.g2g_paths, self.lexicon.g2p_paths, append=False
-    #     )
-
-    # @property
-    # def lexicon_sources(self):
-    #     return self.state.get("lexicon", {})
-
-    # def set_state_lexicon_sources(
-    #     self, g2g: list[str] = [], g2p: list[str] = [], append=True
-    # ):
-    #     if append:
-    #         # Keep old sources and just add the new ones
-    #         current = self.lexicon_sources
-    #         g2g += current.get("g2g", [])
-    #         g2p += current.get("g2p", [])
-
-    #     # Fully resolve all paths and store as strings
-    #     g2g = [str(Path(p).expanduser().resolve()) for p in g2g]
-    #     g2p = [str(Path(p).expanduser().resolve()) for p in g2p]
-
-    #     # Only keep unique
-    #     g2g = list(set(g2g))
-    #     g2p = list(set(g2p))
-    #     newstate = {
-    #         "g2g": g2g,
-    #         "g2p": g2p,
-    #     }
-    #     self.state["lexicon"] |= filter_dict(newstate)
-
-
-# %%
+        logging.info("Done!")

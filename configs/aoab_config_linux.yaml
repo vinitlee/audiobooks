@@ -1,0 +1,13 @@
+name: Ascendance of a Bookworm
+author: Miya Kazuki
+series: Ascendance of a Bookworm
+
+# Files
+files:
+  - ~/Downloads/Ascendance*
+output: /tmp/Audiobooks
+
+# TTS
+voice: am_michael
+speed: 1.2
+lexicon: /home/vinitlee/Projects/audiobooks/lexicons/AoaB.json

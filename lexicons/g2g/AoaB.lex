@@ -1,3 +1,4 @@
+#include ./diagnostics.lex
 #include ./symbols.lex
 pl[ea]+se: please
 o+w+: ow

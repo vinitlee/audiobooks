@@ -34,6 +34,7 @@ import random
 import numpy as np
 import soundfile as sf
 import resampy
+import wordfreq
 
 from dataclasses import dataclass, field
 from functools import lru_cache
@@ -41,7 +42,9 @@ from functools import lru_cache
 from .pipeline import KPipelineLazy, DEFAULT_KOKORO_REPO
 from .lexicon import Lexicon
 
-from audiobooks.core import Chapter, ElementBlock
+# from audiobooks.core import Chapter, ElementBlock
+from audiobooks.tts.lexicon import LexicalMap, LexicalPatternMap
+from .blocks import *
 
 from tqdm import tqdm
 import logging
@@ -70,8 +73,8 @@ class TTSProcessor:
     sample_rate: ClassVar[int] = 24000
     voice: Voice
     speed: float
-    _unknown_words: dict[str, str]
     _saved_g2p: G2P
+    replacement_g2p: PatchedMisakiG2P
 
     def __init__(
         self,
@@ -80,10 +83,10 @@ class TTSProcessor:
         speed: float = 1.0,
         pipeline_args: dict = {},
     ) -> None:
-        self._unknown_words = {}
-
         self.voice = voice
         self.speed = speed
+
+        self.replacement_g2p = PatchedMisakiG2P(lexicon.g2g, lexicon.g2p)
 
         self.init_pipeline(**pipeline_args)
 
@@ -101,23 +104,16 @@ class TTSProcessor:
 
         self.pipeline = KPipelineLazy.instance(**args)
 
-    def generate(self, bl: BlockList, progress_title="TTS Generate"):
+    def generate(self, bl: BlockList, progress_title: str = "TTS Generate"):
 
-        blocks = bl.blocks[:5]  # DEBUG
-        strings = bl.strings[:5]  # DEBUG
+        blocks = bl.blocks
+        strings = bl.strings
 
         self.pipeline.load()
         if self.pipeline._obj is None:
             raise RuntimeError("Pipeline object is None")
 
-        if isinstance(self.pipeline._obj.g2p, G2P):
-            self._saved_g2p = self.pipeline._obj.g2p
-        else:
-            raise RuntimeError(
-                f"G2P was of a different type: {type(self.pipeline._obj.g2p).__name__}"
-                "This project only support English G2P."
-            )
-        self.pipeline._obj.g2p = self.replacement_g2p()
+        self.patch_pipeline()
 
         generator = self.pipeline(
             strings,
@@ -127,12 +123,11 @@ class TTSProcessor:
 
         audio_clips: list[list[np.typing.NDArray]] = [[] for b in blocks]
 
+        # FIXME: This count is wrong and it's messy
         word_counts = [len(s.split()) for s in strings]
         total_words = sum(word_counts)
         word_counts_iter = iter(word_counts)
         progress = tqdm(total=total_words, desc=progress_title, unit="words")
-
-        print(strings)
 
         for result in generator:
             idx = result.text_index
@@ -150,64 +145,52 @@ class TTSProcessor:
 
         audio_parts = [np.concat(c) for c in audio_clips]
 
-        self.pipeline.g2p = self._saved_g2p
+        self.restore_pipeline()
 
         return audio_parts
 
-    def get_unknown_words(self):
+    def patch_pipeline(self):
+        if self.pipeline._obj is None:
+            raise RuntimeError("Pipeline object is None")
+
+        if isinstance(self.pipeline._obj.g2p, G2P):
+            self._saved_g2p = self.pipeline._obj.g2p
+        else:
+            raise RuntimeError(
+                f"G2P was of a different type: {type(self.pipeline._obj.g2p).__name__}"
+                "This project only support English G2P."
+            )
+
+        self.pipeline._obj.g2p = self.replacement_g2p
+
+    def restore_pipeline(self):
+        if self.pipeline._obj is None:
+            raise RuntimeError("Pipeline object is None")
+
+        self.pipeline.g2p = self._saved_g2p
+
+    @property
+    def unknown_words(self):
         """
         Use to generate an unknown words document
         """
-        return self._unknown_words
-
-    # TODO: rewrite as a subclass of misaki.G2P
-    def replacement_g2p(self) -> Callable[[str], Tuple[str, List[MToken]]]:
-        from misaki import en, espeak
-
-        espeak_fallback = espeak.EspeakFallback(british=False)
-
-        def logging_fallback(t: MToken):
-
-            espeak_token = espeak_fallback(t)
-
-            text_lower = t.text.strip().lower()
-            if not self.lexicon.in_g2p(t.text):
-                if not text_lower in self._unknown_words:
-                    self._unknown_words[text_lower] = espeak_token[0] or ""
-
-            return espeak_token
-
-        logging_g2p = en.G2P(trf=False, british=False, fallback=logging_fallback)
-
-        def replacement_fn(text: str) -> Tuple[str, List[MToken]]:
-            orig_text = text  # DEBUG
-            text = self.lexicon.g2g(text)
-            logging.debug(f"{orig_text} -> {text}")
-
-            gs, tokens = logging_g2p(text)
-
-            for t in tokens:
-                gr = t.text
-                ph = t.phonemes
-
-                if self.lexicon.in_g2p(gr):
-                    t.text = self.lexicon.g2p(gr, ph or "")
-
-            return gs, tokens
-
-        return replacement_fn
+        return self.replacement_g2p.unknown_words
 
 
-class PatchedLexicon(en.Lexicon):
+class PatchedMisakiLexicon(en.Lexicon):
     patch_rating: int = 5
-    patch_g2p_lut: Mapping[str, str]
+    patch_g2p_map: LexicalMap
 
-    def __init__(self, british, g2p_lut: Mapping[str, str]):
+    def __init__(self, british, g2p_lut: LexicalMap):
         super().__init__(british=british)
-        self.patch_g2p_lut = g2p_lut
+        self.patch_g2p_map = g2p_lut
 
     def lookup_(self, tk: MToken) -> str | None:
-        return self.patch_g2p_lut.get(tk.text, None)
+        return self.patch_g2p_map(tk.text)
+
+    @property
+    def keys(self) -> List[str]:
+        return list(self.patch_g2p_map.keys())
 
     def __call__(self, tk, ctx):
         if (result := self.lookup_(tk)) is not None:
@@ -215,186 +198,65 @@ class PatchedLexicon(en.Lexicon):
         return super().__call__(tk, ctx)
 
 
-class PatchedG2P(G2P):
-    _espeak: espeak.EspeakFallback
+PreprocessRtn = Tuple[str, list, dict]
+PreprocessFn = Callable[[str], PreprocessRtn]
+PreprocessArg = Union[PreprocessFn, bool]
 
-    def __init__(self, lexicon_patch: Callable[[str], str], **kwargs):
+
+class PatchedMisakiG2P(G2P):
+    _espeak: espeak.EspeakFallback
+    rare_word_threshold: ClassVar[float] = 1e-7
+
+    g2g_pattern_map: LexicalPatternMap
+
+    unknown_words: Dict[str, Optional[str]]
+
+    def __init__(
+        self, g2g_pattern_map: LexicalPatternMap, g2p_map: LexicalMap, **kwargs
+    ):
         """Initialize the G2P engine with a spaCy pipeline, lexicon configuration, and optional fallback resolver."""
         super().__init__(**kwargs)
 
         british = kwargs.get("british", False)
 
-        self.lexicon = PatchedLexicon(british, lexicon_patch)
+        # G2G
+        self.g2g_pattern_map = g2g_pattern_map
+
+        # G2P
+        self.lexicon = PatchedMisakiLexicon(british, g2p_map)
 
         self._espeak = espeak.EspeakFallback(british=british)
         self.fallback = self.fallback_
 
+        self.unknown_words = {}
+
     def fallback_(self, token: MToken) -> tuple[str | None, int | None]:
         espeak_output = self._espeak(token)
 
-        # Check if in lexicon
-        # If not, check English frequency and log to lexicon if low
+        # Check if in lexicon (it generally should not be)
+        if token.text not in self.lexicon.keys:
+            # If not, check English frequency and log to lexicon if low
+            if wordfreq.word_frequency(token.text, "en") < self.rare_word_threshold:
+                self.unknown_words[token.text] = espeak_output[0]
 
         return espeak_output
 
-    @staticmethod
-    def preprocess(text):
-        """Normalize inline markup, extract token-level features, and return aligned text, tokens, and feature map."""
+    def __call__(
+        self,
+        text: str,
+        preprocess: PreprocessArg = True,
+    ) -> Tuple[str, List[MToken]]:
+        if preprocess is False:
+            raise ValueError("preprocess set to False instead of True or a Callable")
 
-        # Run g2g regexes str -> str
+        def _preprocess(text: str) -> PreprocessRtn:
+            text = self.g2g_pattern_map(text)
+            if preprocess is True:
+                return G2P.preprocess(text)
+            else:
+                return preprocess(text)
 
-        return G2P.preprocess(text)
-
-    @staticmethod
-    def retokenize(tokens: List[MToken]) -> List[Union[MToken, List[MToken]]]:
-        """Split tokens into subtokens, handle punctuation and currency cases, and group into lexical word units."""
-        result_tokens = G2P.retokenize(tokens)
-        for i, w in reversed(list(enumerate(result_tokens))):
-            if not isinstance(w, list):
-                if w.phonemes is None:
-                    # If in Lexicon
-                    # w.phonemes, w.rating = lexicon(w.graphemes),5
-                    pass
-        return result_tokens
-
-
-class BlockList:
-    raw_elements: list[ElementBlock]
-
-    def __init__(self, chapter: Chapter) -> None:
-        self.raw_elements = chapter.elements
-
-    @property
-    def blocks(self):
-        return list(self.converted())
-
-    @property
-    def strings(self):
-        return [str(b) for b in self.blocks]
-
-    def converted(self):
-        yield from self.head()
-        for el in self.raw_elements:
-            yield from self.convert_element(el)
-        yield from self.foot()
-
-    def head(self) -> Iterable[Block]:
-        return ()
-
-    def foot(self) -> Iterable[Block]:
-        return (PauseBlock(0.5),)
-
-    def convert_element(self, el: ElementBlock) -> Iterable[Block]:
-        match el.tag:
-            case "p":
-                yield from self.conv_text(el)
-            case "h1" | "h2" | "h3":
-                yield from self.conv_title(el)
-            case _:
-                yield from self.conv_default(el)
-
-    @staticmethod
-    def conv_title(el: ElementBlock) -> Iterable[Block]:
-
-        # For use with
-        # WavBlock.from_file(random.choice(transition_sounds))
-        transition_sounds = [
-            # r"G:\Projects\audiobooks\assets\audio\strum_harp_gentle_in_#2-1767349191268.wav",
-            r"G:\Projects\audiobooks\assets\audio\strum_harp_gentle_in_#2-1767349479476.wav",
-            r"G:\Projects\audiobooks\assets\audio\strum_harp_gentle_in_#3-1767349197004.wav",
-            # r"G:\Projects\audiobooks\assets\audio\strum_harp_gentle_in_#3-1767349479477.wav",
-            r"G:\Projects\audiobooks\assets\audio\strum_harp_gentle_in_#4-1767349197004.wav",
-            r"G:\Projects\audiobooks\assets\audio\strum_harp_gentle_in_#4-1767349487169.wav",
-        ]
-
-        return (
-            PauseBlock(0.2),
-            TextBlock(el.text),
-            PauseBlock(0.5),
-        )
-
-    @staticmethod
-    def conv_text(el: ElementBlock) -> Iterable[Block]:
-        return (TextBlock(el.text),)
-
-    @staticmethod
-    def conv_default(el: ElementBlock) -> Iterable[Block]:
-        return (Block(),)
-
-
-@dataclass
-class Block:
-    override: ClassVar[bool] = False
-
-    def audio_data(self, sr: int) -> np.typing.NDArray:
-        return np.array([], dtype=np.float32)
-
-    def __str__(self) -> str:
-        return ""
-
-
-@dataclass
-class TextBlock(Block):
-    text: str = ""
-
-    def __str__(self) -> str:
-        return self.text
-
-
-@dataclass
-class AudioBlock(Block):
-    override: ClassVar[bool] = True
-
-    def audio_data(self, sr: int) -> np.typing.NDArray:
-        return np.array([])
-
-    def __str__(self) -> str:
-        return ""
-
-
-@dataclass
-class WavBlock(AudioBlock):
-    data: np.typing.NDArray
-    _resample_cache: dict = field(default_factory=dict, init=False, repr=False)
-    sr: int
-
-    @classmethod
-    def from_file(cls, path: Path):
-        file_data, file_sr = sf.read(path, dtype="float32")
-        assert file_data.dtype == np.float32
-        if np.ndim(file_data) > 1 and file_data.shape[1] > 1:
-            file_data = np.mean(file_data, axis=1)
-        return cls(file_data, file_sr)
-
-    def resample(self, sr_new: int):
-        if sr_new not in self._resample_cache:
-            self._resample_cache[sr_new] = resampy.resample(self.data, self.sr, sr_new)
-
-        return self._resample_cache[sr_new]
-
-    def audio_data(self, sr: int) -> np.typing.NDArray:
-        if sr != self.sr:
-            return self.resample(sr)
-        return self.data
-
-
-@dataclass
-class RandomAudioBlock(AudioBlock):
-    possible_blocks: Iterable[AudioBlock]
-
-    def audio_data(self, sr: int) -> np.ndarray[Tuple[Any], np.dtype]:
-        selection_idx = np.random.randint(0, len(self.possible_blocks) - 1)
-        return self.possible_blocks[selection_idx].audio_data(sr)
-
-
-@dataclass
-class PauseBlock(AudioBlock):
-    pause_length: float = 0
-
-    def audio_data(self, sr: int) -> np.typing.NDArray:
-        if self.pause_length == 0:
-            return np.array([])
-        return np.zeros(int(self.pause_length * sr), dtype=np.float32)
+        return super().__call__(text, preprocess=_preprocess)  # type: ignore
 
 
 # %%

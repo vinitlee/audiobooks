@@ -1,0 +1,13 @@
+name: Grimgar of Fantasy and Ash
+author: Ao Jumonji
+series: Grimgar of Fantasy and Ash
+
+# Files
+files:
+  - ~/Downloads/Grimgar*01*
+output: /tmp/Audiobooks/Grimgar of Fantasy and Ash
+
+# TTS
+voice: am_michael
+speed: 1.2
+# lexicon: /home/vinitlee/Projects/audiobooks/lexicons/AoaB.json
